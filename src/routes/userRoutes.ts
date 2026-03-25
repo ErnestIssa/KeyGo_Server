@@ -1,21 +1,12 @@
 import { Router } from 'express';
-import {
-  register,
-  login,
-  getProfile,
-  updateProfile,
-} from '../controllers/userController';
+import { register, login, demoLogin, getProfile } from '../controllers/userController';
 import { authenticate } from '../middleware/auth';
 
 const router = Router();
 
-// Public routes
 router.post('/register', register);
 router.post('/login', login);
-
-// Protected routes
+router.post('/demo-login', demoLogin);
 router.get('/profile', authenticate, getProfile);
-router.put('/profile', authenticate, updateProfile);
 
 export default router;
-

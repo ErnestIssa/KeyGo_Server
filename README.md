@@ -1,102 +1,43 @@
-# Keygo Server
+# KeyGo API (MVP)
 
-Backend API for Keygo - A platform connecting private individuals who want their car relocated with private drivers.
+Express + MongoDB API for **vehicle relocation only** (not passenger transport).
 
-## Tech Stack
+## Run locally
 
-- Node.js
-- Express
-- TypeScript
-- MongoDB (Mongoose)
-- JWT Authentication
-- Socket.io (for real-time chat)
-
-## Project Structure
-
-```
-src/
-├── config/          # Configuration files (database, etc.)
-├── controllers/     # Request handlers
-├── middleware/      # Express middleware (auth, error handling)
-├── models/          # Mongoose schemas
-├── routes/          # API route definitions
-├── socket/          # Socket.io handlers
-├── types/           # TypeScript type definitions
-├── utils/           # Utility functions (JWT, etc.)
-└── server.ts        # Application entry point
-```
-
-## Core Entities
-
-- **User**: Platform users (can be requester, driver, or both)
-- **CarRequest**: Car relocation requests posted by users
-- **AgreementLog**: Explicit consent logging for liability acknowledgements
-- **ChatMessage**: Messages between users regarding car requests
-- **Rating**: User ratings after completed relocations
-
-## Setup
-
-1. Install dependencies:
 ```bash
 npm install
-```
-
-2. Copy `.env.example` to `.env` and configure:
-```bash
-cp .env.example .env
-```
-
-3. Start MongoDB (if running locally)
-
-4. Run in development mode:
-```bash
-npm run dev
-```
-
-5. Build for production:
-```bash
-npm run build
 npm start
 ```
 
-## API Endpoints
+- **`npm start`** runs **`tsx src/server.ts`** (no `dist/` build required).
+- Optional: **`npm run build`** then **`node dist/server.js`** if you want compiled JS.
+- For development with hot reload: **`npm run dev`**.
 
-### Authentication
-- `POST /api/users/register` - Register new user
-- `POST /api/users/login` - Login user
-- `GET /api/users/profile` - Get current user profile (protected)
-- `PUT /api/users/profile` - Update user profile (protected)
+The server uses **`process.env.PORT || 3000`**, listens on **`0.0.0.0`**, and logs **`Server running on port …`** plus **`MongoDB connected`** when the database is ready.
 
-### Car Requests
-- `POST /api/car-requests` - Create new car request (protected)
-- `GET /api/car-requests` - Get all car requests (protected)
-- `GET /api/car-requests/:id` - Get single car request (protected)
-- `PUT /api/car-requests/:id` - Update car request (protected)
-- `DELETE /api/car-requests/:id` - Delete car request (protected)
-- `POST /api/car-requests/:id/interest` - Express interest as driver (protected)
+## Environment
 
-### Agreements
-- `POST /api/agreements` - Log agreement/consent (protected)
-- `GET /api/agreements/car-request/:carRequestId` - Get agreements for car request (protected)
+| Variable | Notes |
+|----------|--------|
+| `MONGO_URI` or `MONGODB_URI` | **Required in production** (e.g. Render). Optional in local dev — falls back to `mongodb://127.0.0.1:27017/keygo` with a console warning. |
+| `PORT` | Set automatically on **Render**. Default **3000** locally. |
+| `NODE_ENV` | Set to **`production`** on Render. |
+| `CORS_ORIGIN` | Your frontend origin(s), comma-separated. If unset in production, CORS reflects the request Origin and a warning is logged. |
 
-### Chat
-- `POST /api/chat` - Send message (protected)
-- `GET /api/chat/car-request/:carRequestId` - Get messages for car request (protected)
-- `PUT /api/chat/:messageId/read` - Mark message as read (protected)
+Copy `.env.example` to `.env` for local development.
 
-### Ratings
-- `POST /api/ratings` - Create rating (protected)
-- `GET /api/ratings/user/:userId` - Get ratings for user (protected)
-- `PUT /api/ratings/:id` - Update rating (protected)
+## Render (Web Service)
 
-## Important Notes
+1. **Build command:** `npm install` (no `tsc` step required)  
+2. **Start command:** `npm start` (runs `tsx src/server.ts`)  
+3. **Environment:** `MONGO_URI`, `NODE_ENV=production`, `CORS_ORIGIN` (your static site / frontend URL).
 
-- All endpoints marked as "protected" require JWT authentication via `Authorization: Bearer <token>` header
-- The platform is designed as a neutral intermediary - no driver assignment, no payments, no guarantees
-- All consent/agreement actions are logged with timestamps and metadata for legal compliance
-- Socket.io is used for real-time chat functionality
+Health check: `GET /health`
 
-## Development Status
+## API (summary)
 
-⚠️ **Note**: All endpoints currently return placeholder responses (501 Not Implemented). Implementation logic needs to be added to controllers.
-
+- `POST /api/users/register` — `{ email, password, name, role: "owner" | "driver" }`
+- `POST /api/users/login`
+- `POST /api/users/demo-login` — `{ role: "owner" | "driver" }` (password `demo123`)
+- `GET /api/users/profile` — Bearer JWT
+- Trips under `/api/trips` — create (owner), list available (driver), accept, complete (owner).

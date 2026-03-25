@@ -3,11 +3,10 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IUser extends Document {
   email: string;
   password: string;
-  firstName: string;
-  lastName: string;
-  phone?: string;
-  role: 'requester' | 'driver' | 'both';
-  isVerified: boolean;
+  name: string;
+  role: 'owner' | 'driver' | 'admin';
+  /** Only used for role === driver. Owners/admins are treated as approved for trip actions. */
+  driverApproved: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -26,29 +25,19 @@ const UserSchema: Schema = new Schema(
       required: true,
       minlength: 6,
     },
-    firstName: {
+    name: {
       type: String,
       required: true,
-      trim: true,
-    },
-    lastName: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    phone: {
-      type: String,
       trim: true,
     },
     role: {
       type: String,
-      enum: ['requester', 'driver', 'both'],
+      enum: ['owner', 'driver', 'admin'],
       required: true,
-      default: 'requester',
     },
-    isVerified: {
+    driverApproved: {
       type: Boolean,
-      default: false,
+      default: true,
     },
   },
   {
@@ -57,4 +46,3 @@ const UserSchema: Schema = new Schema(
 );
 
 export default mongoose.model<IUser>('User', UserSchema);
-
