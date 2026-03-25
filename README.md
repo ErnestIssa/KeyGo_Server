@@ -23,6 +23,7 @@ The server uses **`process.env.PORT || 3000`**, listens on **`0.0.0.0`**, and lo
 | `PORT` | Set automatically on **Render**. Default **3000** locally. |
 | `NODE_ENV` | Set to **`production`** on Render. |
 | `CORS_ORIGIN` | Your frontend origin(s), comma-separated. If unset in production, CORS reflects the request Origin and a warning is logged. |
+| `CORS_INCLUDE_LOCALHOST` | Set to `true` or `1` to merge `localhost` / `127.0.0.1` Vite (5173) and preview (4173) into the allowed list when `CORS_ORIGIN` is set (handy when testing the deployed API from a local browser). |
 
 Copy `.env.example` to `.env` for local development.
 
@@ -30,7 +31,7 @@ Copy `.env.example` to `.env` for local development.
 
 1. **Build command:** `npm install` (no `tsc` step required)  
 2. **Start command:** `npm start` (runs `tsx src/server.ts`)  
-3. **Environment:** `MONGO_URI`, `NODE_ENV=production`, `CORS_ORIGIN` (your static site / frontend URL).
+3. **Environment:** `MONGO_URI`, `NODE_ENV=production`, `CORS_ORIGIN` (your static site / frontend URL). Optionally `CORS_INCLUDE_LOCALHOST=true` if you need local dev against the live API while using an explicit `CORS_ORIGIN`.
 
 Health check: `GET /health`
 

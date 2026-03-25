@@ -2,7 +2,7 @@
 import 'dotenv/config';
 
 import express, { Application } from 'express';
-import cors from 'cors';
+import cors, { type CorsOptions } from 'cors';
 import { connectDatabase } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import userRoutes from './routes/userRoutes';
@@ -19,32 +19,89 @@ const LISTEN_HOST = '0.0.0.0';
 
 const isProd = process.env.NODE_ENV === 'production';
 
-/**
- * CORS: set CORS_ORIGIN to your frontend origin(s), comma-separated.
- * If unset, we reflect the request Origin (works for many dev setups; set CORS_ORIGIN on Render).
- */
-function corsOriginConfig(): string | string[] | boolean {
-  const raw = process.env.CORS_ORIGIN?.trim();
-  if (!raw) {
-    if (isProd) {
-      console.warn(
-        '[KeyGo] CORS_ORIGIN is not set. Reflecting request Origin. Set CORS_ORIGIN to your deployed frontend URL for explicit CORS.'
-      );
-    }
-    return true;
+/** Vite dev / preview — allow API calls from local browsers when CORS_ORIGIN is an explicit list. */
+const LOCALHOST_FRONTEND_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
+] as const;
+
+/** Normalize env origins so `host.com`, `https://host.com/`, and `https://host.com` all match the browser's Origin. */
+function normalizeOriginForAllowList(value: string): string {
+  let s = value.trim().replace(/\/$/, '');
+  if (!s) return s;
+  if (!/^https?:\/\//i.test(s)) {
+    s = `https://${s}`;
   }
-  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  if (list.length === 0) return true;
-  if (list.length === 1) return list[0];
-  return list;
+  return s.replace(/\/$/, '');
 }
 
-app.use(
-  cors({
-    origin: isProd ? corsOriginConfig() : true,
+/**
+ * CORS: set CORS_ORIGIN to your deployed frontend origin(s), comma-separated.
+ * If unset in production, we reflect the request Origin (works but is broad — prefer setting CORS_ORIGIN).
+ * Set CORS_INCLUDE_LOCALHOST=true to also allow local Vite/preview when CORS_ORIGIN is set.
+ */
+function buildCorsOptions(): CorsOptions {
+  const raw = process.env.CORS_ORIGIN?.trim();
+  const mergeLocal =
+    process.env.CORS_INCLUDE_LOCALHOST === 'true' || process.env.CORS_INCLUDE_LOCALHOST === '1';
+
+  const allowed = new Set<string>();
+  if (raw) {
+    for (const part of raw.split(',')) {
+      const n = normalizeOriginForAllowList(part);
+      if (n) allowed.add(n);
+    }
+  }
+  if (mergeLocal) {
+    for (const o of LOCALHOST_FRONTEND_ORIGINS) {
+      allowed.add(o);
+    }
+  }
+
+  if (isProd && allowed.size === 0) {
+    console.warn(
+      '[KeyGo] CORS_ORIGIN is not set. Reflecting request Origin. Set CORS_ORIGIN to your deployed frontend URL for explicit CORS.'
+    );
+  }
+
+  return {
+    origin: (requestOrigin, callback) => {
+      if (!isProd) {
+        callback(null, true);
+        return;
+      }
+
+      // Tools / server-side requests may omit Origin — allow through
+      if (!requestOrigin) {
+        callback(null, true);
+        return;
+      }
+
+      const incoming = requestOrigin.trim().replace(/\/$/, '');
+
+      if (allowed.size === 0) {
+        callback(null, incoming);
+        return;
+      }
+
+      if (allowed.has(incoming)) {
+        callback(null, incoming);
+        return;
+      }
+
+      console.warn(
+        `[KeyGo] CORS rejected Origin "${incoming}". Allowed: ${[...allowed].join(', ')}. Fix CORS_ORIGIN on Render (include https://, no trailing slash).`
+      );
+      callback(null, false);
+    },
     credentials: true,
-  })
-);
+    optionsSuccessStatus: 204,
+  };
+}
+
+app.use(cors(buildCorsOptions()));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
