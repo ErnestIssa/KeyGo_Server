@@ -6,7 +6,10 @@ import cors, { type CorsOptions } from 'cors';
 import { connectDatabase } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import userRoutes from './routes/userRoutes';
+import authRoutes from './routes/authRoutes';
 import tripRoutes from './routes/tripRoutes';
+import { listAvailableTrips } from './controllers/tripController';
+import { authenticate } from './middleware/auth';
 import { printListenUrls } from './utils/printListenUrls';
 
 const app: Application = express();
@@ -110,7 +113,10 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/users', userRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
+/** Mobile / alias: same as GET /api/trips/available (requires driver JWT). */
+app.get('/api/jobs', authenticate, listAvailableTrips);
 
 app.use(errorHandler);
 
