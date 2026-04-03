@@ -41,4 +41,5 @@ Health check: `GET /health`
 - `POST /api/users/login`
 - `POST /api/users/demo-login` — `{ role: "owner" | "driver" }` (password `demo123`)
 - `GET /api/users/profile` — Bearer JWT
+- `PATCH /api/users/role` — Bearer JWT, body `{ role: "owner" | "driver" }` — switches the signed-in account’s active mode; returns `{ user, token }` (same email/password, no second account).
 - Trips under `/api/trips` — create (owner), list available (driver), accept, complete (owner).

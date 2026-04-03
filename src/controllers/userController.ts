@@ -167,6 +167,46 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
+/**
+ * Switch active app role (owner ↔ driver) for the authenticated account.
+ * JWT does not embed role; middleware reloads the user each request. A fresh token is still returned for clients that re-store session on login-shaped responses.
+ */
+export const updateRole = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const current = req.user as IUser | undefined;
+    if (!current) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    if (current.role === 'admin') {
+      res.status(403).json({ error: 'Admin accounts cannot switch app role from the mobile or web app' });
+      return;
+    }
+
+    const { role } = req.body as { role?: string };
+    if (role !== 'owner' && role !== 'driver') {
+      res.status(400).json({ error: 'role must be owner or driver' });
+      return;
+    }
+
+    if (current.role === role) {
+      res.json({ user: toPublicUser(current), token: generateToken(current) });
+      return;
+    }
+
+    const updated = await User.findByIdAndUpdate(current._id, { role }, { new: true }).select('-password');
+    if (!updated) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    res.json({ user: toPublicUser(updated), token: generateToken(updated) });
+  } catch (error) {
+    res.status(500).json({ error: 'Could not update role' });
+  }
+};
+
 export const uploadAvatar = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const raw = (req.body as { image?: unknown })?.image;
