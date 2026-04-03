@@ -7,6 +7,10 @@ export interface IUser extends Document {
   role: 'owner' | 'driver' | 'admin';
   /** Only used for role === driver. Owners/admins are treated as approved for trip actions. */
   driverApproved: boolean;
+  /** Public path served from API origin, e.g. /uploads/avatars/<id>.jpg */
+  avatarUrl?: string;
+  /** Display rating 0–5 (e.g. from reviews); defaults in API response when unset. */
+  ratingAverage?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +42,15 @@ const UserSchema: Schema = new Schema(
     driverApproved: {
       type: Boolean,
       default: true,
+    },
+    avatarUrl: {
+      type: String,
+      trim: true,
+    },
+    ratingAverage: {
+      type: Number,
+      min: 0,
+      max: 5,
     },
   },
   {

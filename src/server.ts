@@ -1,6 +1,8 @@
 // Load .env before any other local imports that read process.env (e.g. database config).
 import 'dotenv/config';
 
+import path from 'path';
+import fs from 'fs';
 import express, { Application } from 'express';
 import cors, { type CorsOptions } from 'cors';
 import { connectDatabase } from './config/database';
@@ -105,8 +107,19 @@ function buildCorsOptions(): CorsOptions {
 }
 
 app.use(cors(buildCorsOptions()));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '3mb' }));
+app.use(express.urlencoded({ extended: true, limit: '3mb' }));
+
+const uploadsDir = path.join(process.cwd(), 'uploads');
+const avatarsDir = path.join(uploadsDir, 'avatars');
+try {
+  if (!fs.existsSync(avatarsDir)) {
+    fs.mkdirSync(avatarsDir, { recursive: true });
+  }
+} catch {
+  console.warn('[KeyGo] Could not create uploads/avatars directory');
+}
+app.use('/uploads', express.static(uploadsDir));
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

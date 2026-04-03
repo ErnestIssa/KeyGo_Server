@@ -10,17 +10,40 @@ function refId(ref: unknown): string | null {
   return String(ref);
 }
 
-const tripJson = (trip: {
-  _id: unknown;
-  owner: unknown;
-  driver?: unknown;
-  pickupLocation: string;
-  dropoffLocation: string;
-  carDescription: string;
-  paymentAmount: number;
-  status: string;
-  createdAt: Date;
-}) => {
+type Viewer = { _id: unknown; role: string };
+
+/** Server-computed UI hints — clients must not infer permissions from role + status alone. */
+function allowedActionsForTrip(
+  trip: { status: string; owner: unknown; driver?: unknown },
+  viewer: Viewer
+): { accept: boolean; complete: boolean } {
+  const uid = String(viewer._id);
+  const ownerId = refId(trip.owner);
+  const isOwner = ownerId != null && ownerId === uid;
+
+  if (viewer.role === 'driver' && trip.status === 'pending' && ownerId != null && ownerId !== uid) {
+    return { accept: true, complete: false };
+  }
+  if (viewer.role === 'owner' && trip.status === 'accepted' && isOwner) {
+    return { accept: false, complete: true };
+  }
+  return { accept: false, complete: false };
+}
+
+const tripJson = (
+  trip: {
+    _id: unknown;
+    owner: unknown;
+    driver?: unknown;
+    pickupLocation: string;
+    dropoffLocation: string;
+    carDescription: string;
+    paymentAmount: number;
+    status: string;
+    createdAt: Date;
+  },
+  viewer?: Viewer
+) => {
   const o = trip.owner as { _id?: unknown; name?: string; email?: string } | null;
   const d = trip.driver as { _id?: unknown; name?: string; email?: string } | null;
   return {
@@ -37,6 +60,7 @@ const tripJson = (trip: {
     driver: d
       ? { id: String(d._id), name: d.name, email: d.email }
       : undefined,
+    allowedActions: viewer ? allowedActionsForTrip(trip, viewer) : { accept: false, complete: false },
   };
 };
 
@@ -76,7 +100,7 @@ export const createTrip = async (req: AuthRequest, res: Response): Promise<void>
     });
 
     await trip.populate('owner', 'name email');
-    res.status(201).json({ trip: tripJson(trip) });
+    res.status(201).json({ trip: tripJson(trip, user) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to create trip' });
   }
@@ -91,11 +115,16 @@ export const listAvailableTrips = async (req: AuthRequest, res: Response): Promi
       return;
     }
 
+    if (user.driverApproved === false) {
+      res.status(403).json({ error: 'Driver account is not approved to browse trips' });
+      return;
+    }
+
     const trips = await Trip.find({ status: 'pending' })
       .sort({ createdAt: -1 })
       .populate('owner', 'name email');
 
-    res.json({ trips: trips.map((t: (typeof trips)[number]) => tripJson(t)) });
+    res.json({ trips: trips.map((t: (typeof trips)[number]) => tripJson(t, user)) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list trips' });
   }
@@ -118,7 +147,7 @@ export const listMyTrips = async (req: AuthRequest, res: Response): Promise<void
       .populate('owner', 'name email')
       .populate('driver', 'name email');
 
-    res.json({ trips: trips.map((t: (typeof trips)[number]) => tripJson(t)) });
+    res.json({ trips: trips.map((t: (typeof trips)[number]) => tripJson(t, user)) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list your trips' });
   }
@@ -145,12 +174,16 @@ export const getTrip = async (req: AuthRequest, res: Response): Promise<void> =>
     const isDriver = refId(trip.driver) === uid;
 
     if (trip.status === 'pending' && user.role === 'driver') {
-      res.json({ trip: tripJson(trip) });
+      if (user.driverApproved === false) {
+        res.status(403).json({ error: 'Driver account is not approved to view available trips' });
+        return;
+      }
+      res.json({ trip: tripJson(trip, user) });
       return;
     }
 
     if (isOwner || isDriver) {
-      res.json({ trip: tripJson(trip) });
+      res.json({ trip: tripJson(trip, user) });
       return;
     }
 
@@ -165,6 +198,11 @@ export const acceptTrip = async (req: AuthRequest, res: Response): Promise<void>
     const user = req.user;
     if (!user || user.role !== 'driver') {
       res.status(403).json({ error: 'Only drivers can accept trips' });
+      return;
+    }
+
+    if (user.driverApproved === false) {
+      res.status(403).json({ error: 'Driver account is not approved to accept trips' });
       return;
     }
 
@@ -192,7 +230,7 @@ export const acceptTrip = async (req: AuthRequest, res: Response): Promise<void>
     await trip.populate('owner', 'name email');
     await trip.populate('driver', 'name email');
 
-    res.json({ trip: tripJson(trip) });
+    res.json({ trip: tripJson(trip, user) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to accept trip' });
   }
@@ -229,7 +267,7 @@ export const completeTrip = async (req: AuthRequest, res: Response): Promise<voi
     await trip.populate('owner', 'name email');
     await trip.populate('driver', 'name email');
 
-    res.json({ trip: tripJson(trip) });
+    res.json({ trip: tripJson(trip, user) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to complete trip' });
   }
