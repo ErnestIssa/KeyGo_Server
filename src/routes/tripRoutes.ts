@@ -7,6 +7,7 @@ import {
   getTrip,
   acceptTrip,
   completeTrip,
+  updateTripVehicleLocation,
 } from '../controllers/tripController';
 
 const router = Router();
@@ -16,6 +17,7 @@ router.use(authenticate);
 router.post('/', createTrip);
 router.get('/available', listAvailableTrips);
 router.get('/mine', listMyTrips);
+router.patch('/:id/vehicle-location', updateTripVehicleLocation);
 router.get('/:id', getTrip);
 router.post('/:id/accept', acceptTrip);
 router.post('/:id/complete', completeTrip);

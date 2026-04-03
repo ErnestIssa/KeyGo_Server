@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import Trip from '../models/Trip';
 import { AuthRequest } from '../middleware/auth';
+import { isValidLatLng, parseCoordinate } from '../utils/geo';
 
 function refId(ref: unknown): string | null {
   if (ref == null) return null;
@@ -37,6 +38,16 @@ const tripJson = (
     driver?: unknown;
     pickupLocation: string;
     dropoffLocation: string;
+    pickupLatitude?: number;
+    pickupLongitude?: number;
+    dropoffLatitude?: number;
+    dropoffLongitude?: number;
+    vehicleLocation?: {
+      latitude: number;
+      longitude: number;
+      heading?: number;
+      recordedAt: Date;
+    };
     carDescription: string;
     paymentAmount: number;
     status: string;
@@ -46,10 +57,27 @@ const tripJson = (
 ) => {
   const o = trip.owner as { _id?: unknown; name?: string; email?: string } | null;
   const d = trip.driver as { _id?: unknown; name?: string; email?: string } | null;
+  const vl = trip.vehicleLocation;
   return {
     id: String(trip._id),
     pickupLocation: trip.pickupLocation,
     dropoffLocation: trip.dropoffLocation,
+    ...(trip.pickupLatitude != null && trip.pickupLongitude != null
+      ? { pickupLatitude: trip.pickupLatitude, pickupLongitude: trip.pickupLongitude }
+      : {}),
+    ...(trip.dropoffLatitude != null && trip.dropoffLongitude != null
+      ? { dropoffLatitude: trip.dropoffLatitude, dropoffLongitude: trip.dropoffLongitude }
+      : {}),
+    ...(vl
+      ? {
+          vehicleLocation: {
+            latitude: vl.latitude,
+            longitude: vl.longitude,
+            ...(vl.heading != null ? { heading: vl.heading } : {}),
+            recordedAt: vl.recordedAt instanceof Date ? vl.recordedAt.toISOString() : vl.recordedAt,
+          },
+        }
+      : {}),
     carDescription: trip.carDescription,
     paymentAmount: trip.paymentAmount,
     status: trip.status,
@@ -72,11 +100,24 @@ export const createTrip = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    const { pickupLocation, dropoffLocation, carDescription, paymentAmount } = req.body as {
+    const {
+      pickupLocation,
+      dropoffLocation,
+      carDescription,
+      paymentAmount,
+      pickupLatitude: rawPickupLat,
+      pickupLongitude: rawPickupLng,
+      dropoffLatitude: rawDropLat,
+      dropoffLongitude: rawDropLng,
+    } = req.body as {
       pickupLocation?: string;
       dropoffLocation?: string;
       carDescription?: string;
       paymentAmount?: number;
+      pickupLatitude?: unknown;
+      pickupLongitude?: unknown;
+      dropoffLatitude?: unknown;
+      dropoffLongitude?: unknown;
     };
 
     if (!pickupLocation?.trim() || !dropoffLocation?.trim() || !carDescription?.trim()) {
@@ -90,6 +131,11 @@ export const createTrip = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
+    const pLat = parseCoordinate(rawPickupLat);
+    const pLng = parseCoordinate(rawPickupLng);
+    const dLat = parseCoordinate(rawDropLat);
+    const dLng = parseCoordinate(rawDropLng);
+
     const trip = await Trip.create({
       owner: user._id,
       pickupLocation: pickupLocation.trim(),
@@ -97,6 +143,12 @@ export const createTrip = async (req: AuthRequest, res: Response): Promise<void>
       carDescription: carDescription.trim(),
       paymentAmount: amount,
       status: 'pending',
+      ...(pLat != null && pLng != null && isValidLatLng(pLat, pLng)
+        ? { pickupLatitude: pLat, pickupLongitude: pLng }
+        : {}),
+      ...(dLat != null && dLng != null && isValidLatLng(dLat, dLng)
+        ? { dropoffLatitude: dLat, dropoffLongitude: dLng }
+        : {}),
     });
 
     await trip.populate('owner', 'name email');
@@ -150,6 +202,76 @@ export const listMyTrips = async (req: AuthRequest, res: Response): Promise<void
     res.json({ trips: trips.map((t: (typeof trips)[number]) => tripJson(t, user)) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list your trips' });
+  }
+};
+
+/** Assigned driver reports live vehicle position (accepted trips only). */
+export const updateTripVehicleLocation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user || user.role !== 'driver') {
+      res.status(403).json({ error: 'Only drivers can update vehicle location' });
+      return;
+    }
+
+    if (user.driverApproved === false) {
+      res.status(403).json({ error: 'Driver account is not approved' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { latitude: rawLat, longitude: rawLng, heading: rawHeading } = req.body as {
+      latitude?: unknown;
+      longitude?: unknown;
+      heading?: unknown;
+    };
+
+    const lat = parseCoordinate(rawLat);
+    const lng = parseCoordinate(rawLng);
+    if (lat == null || lng == null || !isValidLatLng(lat, lng)) {
+      res.status(400).json({ error: 'Valid latitude and longitude are required' });
+      return;
+    }
+
+    let heading: number | undefined;
+    if (rawHeading !== undefined && rawHeading !== null && rawHeading !== '') {
+      const h = parseCoordinate(rawHeading);
+      if (h == null || h < 0 || h > 360) {
+        res.status(400).json({ error: 'heading must be a number from 0 to 360' });
+        return;
+      }
+      heading = h;
+    }
+
+    const trip = await Trip.findById(id);
+    if (!trip) {
+      res.status(404).json({ error: 'Trip not found' });
+      return;
+    }
+
+    if (String(trip.driver) !== String(user._id)) {
+      res.status(403).json({ error: 'Only the assigned driver can update vehicle location' });
+      return;
+    }
+
+    if (trip.status !== 'accepted') {
+      res.status(400).json({ error: 'Trip must be accepted to report location' });
+      return;
+    }
+
+    trip.vehicleLocation = {
+      latitude: lat,
+      longitude: lng,
+      recordedAt: new Date(),
+      ...(heading != null ? { heading } : {}),
+    };
+    await trip.save();
+    await trip.populate('owner', 'name email');
+    await trip.populate('driver', 'name email');
+
+    res.json({ trip: tripJson(trip, user) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update vehicle location' });
   }
 };
 
