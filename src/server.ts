@@ -11,6 +11,8 @@ import userRoutes from './routes/userRoutes';
 import authRoutes from './routes/authRoutes';
 import tripRoutes from './routes/tripRoutes';
 import vehicleRoutes from './routes/vehicleRoutes';
+import chatRoutes from './routes/chatRoutes';
+import { registerChatRealtimePlaceholder } from './realtime/chatSocketPlaceholder';
 import { listAvailableTrips } from './controllers/tripController';
 import { authenticate } from './middleware/auth';
 import { printListenUrls } from './utils/printListenUrls';
@@ -130,6 +132,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/vehicles', vehicleRoutes);
+app.use('/api', chatRoutes);
 /** Mobile / alias: same as GET /api/trips/available (requires driver JWT). */
 app.get('/api/jobs', authenticate, listAvailableTrips);
 
@@ -138,6 +141,7 @@ app.use(errorHandler);
 const startServer = async (): Promise<void> => {
   try {
     await connectDatabase();
+    registerChatRealtimePlaceholder();
 
     app.listen(PORT, LISTEN_HOST, () => {
       console.log(`Server running on port ${PORT}`);

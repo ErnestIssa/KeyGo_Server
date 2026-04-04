@@ -172,7 +172,10 @@ export const listAvailableTrips = async (req: AuthRequest, res: Response): Promi
       return;
     }
 
-    const trips = await Trip.find({ status: 'pending' })
+    const trips = await Trip.find({
+      status: 'pending',
+      owner: { $ne: user._id },
+    })
       .sort({ createdAt: -1 })
       .populate('owner', 'name email');
 
@@ -296,6 +299,12 @@ export const getTrip = async (req: AuthRequest, res: Response): Promise<void> =>
     const isDriver = refId(trip.driver) === uid;
 
     if (trip.status === 'pending' && user.role === 'driver') {
+      if (isOwner) {
+        res.status(403).json({
+          error: 'This is your trip request. Switch to owner mode to view or manage it.',
+        });
+        return;
+      }
       if (user.driverApproved === false) {
         res.status(403).json({ error: 'Driver account is not approved to view available trips' });
         return;

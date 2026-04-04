@@ -4,6 +4,10 @@ export interface IUser extends Document {
   email: string;
   password: string;
   name: string;
+  /** Given name(s); optional for legacy accounts (derived from `name` in API). */
+  firstName?: string;
+  /** Family name(s); optional for legacy accounts. */
+  lastName?: string;
   role: 'owner' | 'driver' | 'admin';
   /** Only used for role === driver. Owners/admins are treated as approved for trip actions. */
   driverApproved: boolean;
@@ -32,6 +36,14 @@ const UserSchema: Schema = new Schema(
     name: {
       type: String,
       required: true,
+      trim: true,
+    },
+    firstName: {
+      type: String,
+      trim: true,
+    },
+    lastName: {
+      type: String,
       trim: true,
     },
     role: {

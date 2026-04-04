@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import User, { type IUser } from '../models/User';
 import { generateToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth';
+import { formatChatDisplayName } from '../utils/displayName';
 
 const AVATAR_DIR = path.join(process.cwd(), 'uploads', 'avatars');
 
@@ -19,6 +20,8 @@ export function toPublicUser(user: {
   _id: unknown;
   email: string;
   name: string;
+  firstName?: string | null;
+  lastName?: string | null;
   role: string;
   avatarUrl?: string | null;
   ratingAverage?: number | null;
@@ -28,10 +31,15 @@ export function toPublicUser(user: {
     typeof raRaw === 'number' && !Number.isNaN(raRaw)
       ? Math.min(5, Math.max(0, Math.round(raRaw * 10) / 10))
       : 5;
+  const fn = user.firstName?.trim();
+  const ln = user.lastName?.trim();
   return {
     id: String(user._id),
     email: user.email,
     name: user.name,
+    ...(fn ? { firstName: fn } : {}),
+    ...(ln ? { lastName: ln } : {}),
+    displayName: formatChatDisplayName(user.firstName, user.lastName, user.name),
     role: user.role,
     avatarUrl: user.avatarUrl || undefined,
     ratingAverage,
@@ -45,19 +53,55 @@ function authPayload(user: IUser) {
   };
 }
 
+function parseFirstLastFromBody(body: {
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+}): { firstName: string; lastName: string } | null {
+  let fn = typeof body.firstName === 'string' ? body.firstName.trim() : '';
+  let ln = typeof body.lastName === 'string' ? body.lastName.trim() : '';
+  if (!fn || !ln) {
+    const legacy = typeof body.name === 'string' ? body.name.trim() : '';
+    if (legacy) {
+      const parts = legacy.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        fn = parts[0];
+        ln = parts.slice(1).join(' ');
+      }
+    }
+  }
+  if (!fn || !ln) {
+    return null;
+  }
+  return { firstName: fn, lastName: ln };
+}
+
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password, name, role } = req.body as {
+    const body = req.body as {
       email?: string;
       password?: string;
+      firstName?: string;
+      lastName?: string;
       name?: string;
       role?: string;
     };
+    const { email, password, role } = body;
 
-    if (!email?.trim() || !password || !name?.trim()) {
-      res.status(400).json({ error: 'Email, password, and name are required' });
+    if (!email?.trim() || !password) {
+      res.status(400).json({ error: 'Email and password are required' });
       return;
     }
+
+    const parsed = parseFirstLastFromBody(body);
+    if (!parsed) {
+      res.status(400).json({
+        error: 'First name and last name are required (add last name, or use a full name with at least two words)',
+      });
+      return;
+    }
+    const { firstName: fn, lastName: ln } = parsed;
+    const fullName = `${fn} ${ln}`;
 
     if (password.length < 6) {
       res.status(400).json({ error: 'Password must be at least 6 characters' });
@@ -80,7 +124,9 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     const user = await User.create({
       email: email.toLowerCase().trim(),
       password: hashed,
-      name: name.trim(),
+      name: fullName,
+      firstName: fn,
+      lastName: ln,
       role,
       driverApproved: true,
     });
@@ -131,8 +177,20 @@ export const demoLogin = async (req: Request, res: Response): Promise<void> => {
 
     const config =
       role === 'owner'
-        ? { email: 'demo-owner@keygo.local', name: 'Demo Owner', userRole: 'owner' as const }
-        : { email: 'demo-driver@keygo.local', name: 'Demo Driver', userRole: 'driver' as const };
+        ? {
+            email: 'demo-owner@keygo.local',
+            name: 'Demo Owner',
+            firstName: 'Demo',
+            lastName: 'Owner',
+            userRole: 'owner' as const,
+          }
+        : {
+            email: 'demo-driver@keygo.local',
+            name: 'Demo Driver',
+            firstName: 'Demo',
+            lastName: 'Driver',
+            userRole: 'driver' as const,
+          };
 
     const password = 'demo123';
 
@@ -143,6 +201,8 @@ export const demoLogin = async (req: Request, res: Response): Promise<void> => {
         email: config.email,
         password: hashed,
         name: config.name,
+        firstName: config.firstName,
+        lastName: config.lastName,
         role: config.userRole,
         driverApproved: true,
       });
