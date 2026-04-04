@@ -14,6 +14,8 @@ export interface IConversation extends Document {
   updatedAt: Date;
   lastMessageAt?: Date;
   lastMessagePreview?: string;
+  /** Denormalized sender of the latest message (for list row status). */
+  lastMessageSenderId?: Types.ObjectId;
 }
 
 const ConversationSchema = new Schema<IConversation>(
@@ -36,6 +38,7 @@ const ConversationSchema = new Schema<IConversation>(
     },
     lastMessageAt: { type: Date },
     lastMessagePreview: { type: String, maxlength: 280 },
+    lastMessageSenderId: { type: Schema.Types.ObjectId, ref: 'User' },
     readReceipts: {
       type: [
         {

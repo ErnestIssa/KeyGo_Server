@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { Types } from 'mongoose';
 import User, { type IUser } from '../models/User';
 import { generateToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth';
@@ -223,6 +224,46 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
     }
     res.json({ user: toPublicUser(user) });
   } catch (error) {
+    res.status(500).json({ error: 'Failed to load profile' });
+  }
+};
+
+/** GET /api/users/public/:userId — read-only profile for chat / discovery (no email). */
+export const getPublicProfile = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.params.userId;
+    if (!userId || !Types.ObjectId.isValid(userId)) {
+      res.status(400).json({ error: 'Invalid user id' });
+      return;
+    }
+    const viewer = req.user as IUser | undefined;
+    if (viewer && String(viewer._id) === userId) {
+      res.json({ user: toPublicUser(viewer) });
+      return;
+    }
+
+    const u = await User.findById(userId).select('name firstName lastName avatarUrl role ratingAverage').lean();
+    if (!u) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    const raRaw = u.ratingAverage;
+    const ratingAverage =
+      typeof raRaw === 'number' && !Number.isNaN(raRaw)
+        ? Math.min(5, Math.max(0, Math.round(raRaw * 10) / 10))
+        : 5;
+    res.json({
+      user: {
+        id: String(u._id),
+        name: u.name,
+        displayName: formatChatDisplayName(u.firstName, u.lastName, u.name),
+        role: u.role,
+        avatarUrl: u.avatarUrl || undefined,
+        ratingAverage,
+      },
+    });
+  } catch (e) {
+    console.error('[users] getPublicProfile', e);
     res.status(500).json({ error: 'Failed to load profile' });
   }
 };

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   createConversation,
+  deleteConversation,
   getUnreadChatCount,
   listConversations,
   listMatches,
@@ -16,6 +17,7 @@ router.use(authenticate);
 
 router.post('/conversations', createConversation);
 router.get('/conversations', listConversations);
+router.delete('/conversations/:conversationId', deleteConversation);
 router.post('/conversations/:conversationId/read', markConversationRead);
 router.post('/messages', postMessage);
 router.get('/messages/:conversationId', listMessages);

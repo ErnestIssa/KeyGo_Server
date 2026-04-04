@@ -7,6 +7,12 @@ import User from '../models/User';
 import { AuthRequest } from '../middleware/auth';
 import { areUsersMatched, sortedParticipantPair } from '../utils/matchedUsers';
 import { formatChatDisplayName } from '../utils/displayName';
+import {
+  isInboundUnread,
+  lastMessageRowStatus,
+  outgoingMessageUiStatus,
+  receiptForUser,
+} from '../utils/chatReadStatus';
 
 function publicUser(u: {
   _id: Types.ObjectId;
@@ -81,6 +87,33 @@ export const listConversations = async (req: AuthRequest, res: Response): Promis
       .sort({ lastMessageAt: -1, updatedAt: -1 })
       .lean();
 
+    const convIds = convs.map((c) => c._id as Types.ObjectId);
+    const lastByConv =
+      convIds.length === 0
+        ? []
+        : await Message.aggregate<{
+            _id: Types.ObjectId;
+            senderId: Types.ObjectId;
+            createdAt: Date;
+          }>([
+            { $match: { conversationId: { $in: convIds } } },
+            { $sort: { createdAt: -1 } },
+            {
+              $group: {
+                _id: '$conversationId',
+                senderId: { $first: '$senderId' },
+                createdAt: { $first: '$createdAt' },
+              },
+            },
+          ]);
+    const lastMap = new Map(
+      lastByConv.map((row) => [
+        row._id.toString(),
+        { senderId: row.senderId, createdAt: row.createdAt },
+      ])
+    );
+    const now = new Date();
+
     const out = await Promise.all(
       convs.map(async (c) => {
         const otherId = c.participants.find((p) => !p.equals(meId));
@@ -100,15 +133,33 @@ export const listConversations = async (req: AuthRequest, res: Response): Promis
               }
             )
           : { id: otherId.toString(), name: 'User', displayName: 'User' };
+
+        const cid = (c._id as Types.ObjectId).toString();
+        const agg = lastMap.get(cid);
+        const lastSenderId =
+          (c as { lastMessageSenderId?: Types.ObjectId }).lastMessageSenderId ?? agg?.senderId;
+        const lastTime = agg?.createdAt ?? c.lastMessageAt;
+
+        const receipts = (c.readReceipts ?? []) as { user: Types.ObjectId; lastReadAt: Date }[];
+        const myLastRead = receiptForUser(receipts, meId);
+        const otherLastRead = receiptForUser(receipts, otherId);
+
+        let lastMessageStatus: string | undefined;
+        if (lastSenderId && lastTime) {
+          lastMessageStatus = lastMessageRowStatus(lastSenderId, meId, lastTime, myLastRead, otherLastRead, now);
+        }
+
         return {
-          id: c._id.toString(),
+          id: cid,
           participants: c.participants.map((p) => p.toString()),
           otherUser,
           otherUserId: otherUser.id,
           createdAt: c.createdAt,
           updatedAt: c.updatedAt,
-          lastMessageAt: c.lastMessageAt,
+          lastMessageAt: lastTime ? lastTime.toISOString() : c.lastMessageAt ? new Date(c.lastMessageAt).toISOString() : undefined,
           lastMessagePreview: c.lastMessagePreview,
+          lastMessageSenderId: lastSenderId?.toString(),
+          lastMessageStatus,
         };
       })
     );
@@ -153,7 +204,14 @@ export const postMessage = async (req: AuthRequest, res: Response): Promise<void
     const preview = msg.text.length > 120 ? `${msg.text.slice(0, 117)}...` : msg.text;
     conv.lastMessageAt = msg.createdAt;
     conv.lastMessagePreview = preview;
+    conv.lastMessageSenderId = meId;
     await conv.save();
+
+    const otherParticipant = conv.participants.find((p) => !p.equals(meId));
+    const peerReadAt = otherParticipant
+      ? receiptForUser(conv.readReceipts as { user: Types.ObjectId; lastReadAt: Date }[] | undefined, otherParticipant)
+      : undefined;
+    const deliveryStatus = outgoingMessageUiStatus(msg.createdAt, peerReadAt);
 
     const sender = await User.findById(meId).select('name firstName lastName avatarUrl').lean();
     const senderDisplayName = sender
@@ -172,6 +230,8 @@ export const postMessage = async (req: AuthRequest, res: Response): Promise<void
         senderDisplayName,
         senderName,
         senderAvatarUrl,
+        deliveryStatus,
+        isUnread: false,
       },
     });
   } catch (e) {
@@ -205,6 +265,11 @@ export const listMessages = async (req: AuthRequest, res: Response): Promise<voi
       .limit(200)
       .lean();
 
+    const otherParticipant = conv.participants.find((p) => !p.equals(meId));
+    const receipts = (conv.readReceipts ?? []) as { user: Types.ObjectId; lastReadAt: Date }[];
+    const myLastRead = receiptForUser(receipts, meId);
+    const peerLastRead = otherParticipant ? receiptForUser(receipts, otherParticipant) : undefined;
+
     const senderIds = [...new Set(messages.map((m) => m.senderId.toString()))];
     const senders = await User.find({ _id: { $in: senderIds } })
       .select('name firstName lastName avatarUrl')
@@ -227,6 +292,9 @@ export const listMessages = async (req: AuthRequest, res: Response): Promise<voi
       messages: messages.map((m) => {
         const sid = m.senderId.toString();
         const meta = senderMap.get(sid);
+        const mine = m.senderId.equals(meId);
+        const isUnread = !mine && isInboundUnread(m.createdAt, myLastRead);
+        const deliveryStatus = mine ? outgoingMessageUiStatus(m.createdAt, peerLastRead) : undefined;
         return {
           id: m._id.toString(),
           conversationId: conv._id.toString(),
@@ -236,6 +304,8 @@ export const listMessages = async (req: AuthRequest, res: Response): Promise<voi
           senderDisplayName: meta?.displayName ?? 'User',
           senderName: meta?.fullName ?? 'User',
           senderAvatarUrl: meta?.avatarUrl,
+          isUnread,
+          deliveryStatus,
         };
       }),
     });
@@ -331,6 +401,13 @@ export const listMatches = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+const TRIP_STATUS_LABEL: Record<string, string> = {
+  pending: 'Open',
+  accepted: 'In progress',
+  completed: 'Done',
+  cancelled: 'Cancelled',
+};
+
 /** GET /api/chat/recent-trips — lightweight trip feed for chat hub */
 export const recentTripsForChat = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -339,28 +416,77 @@ export const recentTripsForChat = async (req: AuthRequest, res: Response): Promi
       $or: [{ owner: meId }, { driver: meId }],
     })
       .sort({ updatedAt: -1 })
-      .limit(12)
+      .limit(24)
       .select('owner driver status pickupLocation dropoffLocation updatedAt createdAt paymentAmount')
       .populate('owner', 'name')
       .populate('driver', 'name')
       .lean();
 
-    res.json({
-      trips: trips.map((t) => ({
-        id: (t._id as Types.ObjectId).toString(),
+    const rows = trips.map((t) => {
+      const id = (t._id as Types.ObjectId).toString();
+      const ownerName = t.owner ? (t.owner as { name?: string }).name : undefined;
+      const driverName = t.driver ? (t.driver as { name?: string }).name : undefined;
+      const parties = [ownerName, driverName].filter(Boolean).join(' & ') || 'Trip';
+      const st = TRIP_STATUS_LABEL[t.status] ?? t.status;
+      const at = t.updatedAt ?? t.createdAt;
+      return {
+        id,
         status: t.status,
         pickupLocation: t.pickupLocation,
         dropoffLocation: t.dropoffLocation,
         updatedAt: t.updatedAt,
         createdAt: t.createdAt,
         paymentAmount: t.paymentAmount,
-        owner: t.owner ? { name: (t.owner as { name?: string }).name } : undefined,
-        driver: t.driver ? { name: (t.driver as { name?: string }).name } : undefined,
+        owner: ownerName ? { name: ownerName } : undefined,
+        driver: driverName ? { name: driverName } : undefined,
+        activity: {
+          at: at.toISOString(),
+          who: parties,
+          summary: `${st} · ${t.pickupLocation} → ${t.dropoffLocation}`,
+        },
+      };
+    });
+
+    res.json({
+      trips: rows,
+      activities: rows.map((r) => ({
+        id: `${r.id}-log`,
+        tripId: r.id,
+        at: r.activity.at,
+        who: r.activity.who,
+        summary: r.activity.summary,
       })),
     });
   } catch (e) {
     console.error('[chat] recentTripsForChat', e);
     res.status(500).json({ error: 'Failed to load recent trips' });
+  }
+};
+
+/** DELETE /api/conversations/:conversationId — remove thread for both participants */
+export const deleteConversation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
+      res.status(400).json({ error: 'Invalid conversationId' });
+      return;
+    }
+    const conv = await Conversation.findById(conversationId);
+    if (!conv) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
+    }
+    if (!conv.participants.some((p) => p.equals(meId))) {
+      res.status(403).json({ error: 'Not a participant' });
+      return;
+    }
+    await Message.deleteMany({ conversationId: conv._id });
+    await Conversation.deleteOne({ _id: conv._id });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[chat] deleteConversation', e);
+    res.status(500).json({ error: 'Failed to delete conversation' });
   }
 };
 
