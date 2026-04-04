@@ -228,6 +228,38 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
+/** POST /api/users/push-token — register Expo push token and notification preference. */
+export const registerPushToken = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const current = req.user as IUser | undefined;
+    if (!current) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+    const { expoPushToken, notificationsEnabled } = req.body as {
+      expoPushToken?: string;
+      notificationsEnabled?: boolean;
+    };
+    const update: { expoPushToken?: string; notificationsEnabled?: boolean } = {};
+    if (typeof expoPushToken === 'string') {
+      const t = expoPushToken.trim();
+      update.expoPushToken = t.length > 0 ? t : undefined;
+    }
+    if (typeof notificationsEnabled === 'boolean') {
+      update.notificationsEnabled = notificationsEnabled;
+    }
+    if (Object.keys(update).length === 0) {
+      res.status(400).json({ error: 'expoPushToken or notificationsEnabled required' });
+      return;
+    }
+    await User.findByIdAndUpdate(current._id, update);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[users] registerPushToken', e);
+    res.status(500).json({ error: 'Failed to save push settings' });
+  }
+};
+
 /** GET /api/users/public/:userId — read-only profile for chat / discovery (no email). */
 export const getPublicProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {

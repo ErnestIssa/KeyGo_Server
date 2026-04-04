@@ -7,6 +7,9 @@ import User from '../models/User';
 import { AuthRequest } from '../middleware/auth';
 import { areUsersMatched, sortedParticipantPair } from '../utils/matchedUsers';
 import { formatChatDisplayName } from '../utils/displayName';
+import { broadcastMessagesRead } from '../realtime/chatRealtime';
+import { markConversationReadByUser } from '../services/conversationReadService';
+import { createChatMessage, ChatMessageError } from '../services/chatMessageService';
 import {
   isInboundUnread,
   lastMessageRowStatus,
@@ -176,65 +179,17 @@ export const postMessage = async (req: AuthRequest, res: Response): Promise<void
   try {
     const meId = (req.user as { _id: Types.ObjectId })._id;
     const { conversationId, text } = req.body as { conversationId?: string; text?: string };
-    if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
+    if (!conversationId) {
       res.status(400).json({ error: 'conversationId is required' });
       return;
     }
-    if (!text || typeof text !== 'string' || !text.trim()) {
-      res.status(400).json({ error: 'text is required' });
-      return;
-    }
-
-    const conv = await Conversation.findById(conversationId);
-    if (!conv) {
-      res.status(404).json({ error: 'Conversation not found' });
-      return;
-    }
-    if (!conv.participants.some((p) => p.equals(meId))) {
-      res.status(403).json({ error: 'Not a participant' });
-      return;
-    }
-
-    const msg = await Message.create({
-      conversationId: conv._id,
-      senderId: meId,
-      text: text.trim().slice(0, 4000),
-    });
-
-    const preview = msg.text.length > 120 ? `${msg.text.slice(0, 117)}...` : msg.text;
-    conv.lastMessageAt = msg.createdAt;
-    conv.lastMessagePreview = preview;
-    conv.lastMessageSenderId = meId;
-    await conv.save();
-
-    const otherParticipant = conv.participants.find((p) => !p.equals(meId));
-    const peerReadAt = otherParticipant
-      ? receiptForUser(conv.readReceipts as { user: Types.ObjectId; lastReadAt: Date }[] | undefined, otherParticipant)
-      : undefined;
-    const deliveryStatus = outgoingMessageUiStatus(msg.createdAt, peerReadAt);
-
-    const sender = await User.findById(meId).select('name firstName lastName avatarUrl').lean();
-    const senderDisplayName = sender
-      ? formatChatDisplayName(sender.firstName, sender.lastName, sender.name)
-      : 'User';
-    const senderName = sender?.name ?? 'User';
-    const senderAvatarUrl = sender?.avatarUrl || undefined;
-
-    res.status(201).json({
-      message: {
-        id: msg._id.toString(),
-        conversationId: conv._id.toString(),
-        senderId: meId.toString(),
-        text: msg.text,
-        createdAt: msg.createdAt,
-        senderDisplayName,
-        senderName,
-        senderAvatarUrl,
-        deliveryStatus,
-        isUnread: false,
-      },
-    });
+    const { message } = await createChatMessage(meId, conversationId, text ?? '');
+    res.status(201).json({ message });
   } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
     console.error('[chat] postMessage', e);
     res.status(500).json({ error: 'Failed to send message' });
   }
@@ -289,6 +244,7 @@ export const listMessages = async (req: AuthRequest, res: Response): Promise<voi
     );
 
     res.json({
+      peerLastReadAt: peerLastRead ? peerLastRead.toISOString() : null,
       messages: messages.map((m) => {
         const sid = m.senderId.toString();
         const meta = senderMap.get(sid);
@@ -508,16 +464,12 @@ export const markConversationRead = async (req: AuthRequest, res: Response): Pro
       res.status(403).json({ error: 'Not a participant' });
       return;
     }
-    const now = new Date();
-    const receipts = [...(conv.readReceipts ?? [])];
-    const idx = receipts.findIndex((r) => r.user.equals(meId));
-    if (idx >= 0) {
-      receipts[idx].lastReadAt = now;
-    } else {
-      receipts.push({ user: meId, lastReadAt: now });
+    const result = await markConversationReadByUser(meId, conversationId);
+    if (!result) {
+      res.status(404).json({ error: 'Conversation not found' });
+      return;
     }
-    conv.readReceipts = receipts;
-    await conv.save();
+    broadcastMessagesRead(conversationId, meId.toString(), result.readAtIso);
     res.json({ ok: true });
   } catch (e) {
     console.error('[chat] markConversationRead', e);

@@ -3,8 +3,10 @@ import 'dotenv/config';
 
 import path from 'path';
 import fs from 'fs';
+import http from 'http';
 import express, { Application } from 'express';
 import cors, { type CorsOptions } from 'cors';
+import { Server } from 'socket.io';
 import { connectDatabase } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import userRoutes from './routes/userRoutes';
@@ -12,7 +14,8 @@ import authRoutes from './routes/authRoutes';
 import tripRoutes from './routes/tripRoutes';
 import vehicleRoutes from './routes/vehicleRoutes';
 import chatRoutes from './routes/chatRoutes';
-import { registerChatRealtimePlaceholder } from './realtime/chatSocketPlaceholder';
+import { setChatSocketServer } from './realtime/chatRealtime';
+import { setupChatSocket } from './realtime/chatSocket';
 import { listAvailableTrips } from './controllers/tripController';
 import { authenticate } from './middleware/auth';
 import { printListenUrls } from './utils/printListenUrls';
@@ -141,11 +144,24 @@ app.use(errorHandler);
 const startServer = async (): Promise<void> => {
   try {
     await connectDatabase();
-    registerChatRealtimePlaceholder();
 
-    app.listen(PORT, LISTEN_HOST, () => {
+    const httpServer = http.createServer(app);
+    const io = new Server(httpServer, {
+      path: '/socket.io/',
+      cors: {
+        /** Mobile / RN often omit Origin; JWT still gates the connection. */
+        origin: true,
+        credentials: true,
+      },
+      transports: ['websocket', 'polling'],
+    });
+    setupChatSocket(io);
+    setChatSocketServer(io);
+
+    httpServer.listen(PORT, LISTEN_HOST, () => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Listening on ${LISTEN_HOST}:${PORT}`);
+      console.log('Socket.IO path /socket.io/');
 
       if (isProd) {
         console.log(`NODE_ENV=production`);

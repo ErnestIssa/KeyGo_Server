@@ -15,6 +15,10 @@ export interface IUser extends Document {
   avatarUrl?: string;
   /** Display rating 0–5 (e.g. from reviews); defaults in API response when unset. */
   ratingAverage?: number;
+  /** Expo push token for remote notifications (mobile). */
+  expoPushToken?: string;
+  /** User can disable push from app settings. */
+  notificationsEnabled?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -63,6 +67,14 @@ const UserSchema: Schema = new Schema(
       type: Number,
       min: 0,
       max: 5,
+    },
+    expoPushToken: {
+      type: String,
+      trim: true,
+    },
+    notificationsEnabled: {
+      type: Boolean,
+      default: true,
     },
   },
   {
