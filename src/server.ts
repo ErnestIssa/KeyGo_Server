@@ -10,6 +10,7 @@ import { errorHandler } from './middleware/errorHandler';
 import userRoutes from './routes/userRoutes';
 import authRoutes from './routes/authRoutes';
 import tripRoutes from './routes/tripRoutes';
+import vehicleRoutes from './routes/vehicleRoutes';
 import { listAvailableTrips } from './controllers/tripController';
 import { authenticate } from './middleware/auth';
 import { printListenUrls } from './utils/printListenUrls';
@@ -128,6 +129,7 @@ app.get('/health', (req, res) => {
 app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
+app.use('/api/vehicles', vehicleRoutes);
 /** Mobile / alias: same as GET /api/trips/available (requires driver JWT). */
 app.get('/api/jobs', authenticate, listAvailableTrips);
 
