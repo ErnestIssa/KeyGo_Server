@@ -1,5 +1,7 @@
 import { Types } from 'mongoose';
+import Conversation from '../models/Conversation';
 import User from '../models/User';
+import { getParticipantSettings } from './conversationSettingsService';
 import { getChatSocketServer } from '../realtime/chatRealtime';
 
 function roomForConversation(conversationId: string): string {
@@ -30,6 +32,15 @@ export async function notifyNewChatMessage(opts: {
     } catch {
       /* fall through to push */
     }
+  }
+
+  const convDoc = await Conversation.findById(opts.conversationId).select('participantSettings').lean();
+  if (convDoc) {
+    const muted = getParticipantSettings(
+      convDoc.participantSettings as Parameters<typeof getParticipantSettings>[0],
+      opts.recipientId
+    ).muted;
+    if (muted) return;
   }
 
   const u = await User.findById(opts.recipientId).select('expoPushToken notificationsEnabled').lean();

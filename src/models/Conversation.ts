@@ -5,11 +5,27 @@ export interface IConversationReadReceipt {
   lastReadAt: Date;
 }
 
+/** Per-user UI / notification preferences for this conversation (max 2 entries). */
+export interface IParticipantSettings {
+  user: Types.ObjectId;
+  archived: boolean;
+  muted: boolean;
+  favorite: boolean;
+  /** Custom list label (“Add to list”). */
+  listTag: string | null;
+  /** Forces unread badge until thread is opened. */
+  manualUnread: boolean;
+}
+
 export interface IConversation extends Document {
   /** Exactly two user ids, sorted ascending by string id for stable uniqueness. */
   participants: Types.ObjectId[];
   /** Per-participant read cursor for unread counts (max 2 entries). */
   readReceipts?: IConversationReadReceipt[];
+  /** Per-participant list/archive/mute/favorite flags. */
+  participantSettings?: IParticipantSettings[];
+  /** When true, no participant can send messages until cleared. */
+  isLocked: boolean;
   createdAt: Date;
   updatedAt: Date;
   lastMessageAt?: Date;
@@ -48,6 +64,20 @@ const ConversationSchema = new Schema<IConversation>(
       ],
       default: [],
     },
+    participantSettings: {
+      type: [
+        {
+          user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+          archived: { type: Boolean, default: false },
+          muted: { type: Boolean, default: false },
+          favorite: { type: Boolean, default: false },
+          listTag: { type: String, default: null, maxlength: 120 },
+          manualUnread: { type: Boolean, default: false },
+        },
+      ],
+      default: [],
+    },
+    isLocked: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

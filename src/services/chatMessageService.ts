@@ -52,6 +52,9 @@ export async function createChatMessage(
   if (!conv.participants.some((p) => p.equals(senderId))) {
     throw new ChatMessageError('Not a participant', 403);
   }
+  if ((conv as { isLocked?: boolean }).isLocked) {
+    throw new ChatMessageError('This chat is locked', 403);
+  }
 
   const msg = await Message.create({
     conversationId: conv._id,

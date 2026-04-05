@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { Types } from 'mongoose';
 import Conversation from '../models/Conversation';
+import type { IParticipantSettings } from '../models/Conversation';
 import Message from '../models/Message';
 import Trip from '../models/Trip';
 import User from '../models/User';
@@ -8,7 +9,13 @@ import { AuthRequest } from '../middleware/auth';
 import { areUsersMatched, sortedParticipantPair } from '../utils/matchedUsers';
 import { formatChatDisplayName } from '../utils/displayName';
 import { broadcastMessagesRead } from '../realtime/chatRealtime';
-import { markConversationReadByUser } from '../services/conversationReadService';
+import { markConversationReadByUser, markConversationUnreadByUser } from '../services/conversationReadService';
+import {
+  clearConversationMessages,
+  getParticipantSettings,
+  patchParticipantSettings,
+  setConversationLocked,
+} from '../services/conversationSettingsService';
 import { createChatMessage, ChatMessageError } from '../services/chatMessageService';
 import {
   isInboundUnread,
@@ -86,6 +93,8 @@ export const createConversation = async (req: AuthRequest, res: Response): Promi
 export const listConversations = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const meId = (req.user as { _id: Types.ObjectId })._id;
+    const includeArchived =
+      req.query.includeArchived === 'true' || req.query.includeArchived === '1';
     const convs = await Conversation.find({ participants: meId })
       .sort({ lastMessageAt: -1, updatedAt: -1 })
       .lean();
@@ -123,6 +132,14 @@ export const listConversations = async (req: AuthRequest, res: Response): Promis
         if (!otherId || otherId.equals(meId)) {
           return null;
         }
+        const mySettings = getParticipantSettings(
+          (c as { participantSettings?: IParticipantSettings[] }).participantSettings,
+          meId
+        );
+        if (mySettings.archived && !includeArchived) {
+          return null;
+        }
+
         const other = await User.findById(otherId).select('name firstName lastName email avatarUrl').lean();
         const otherUser = other
           ? publicUser(
@@ -151,6 +168,9 @@ export const listConversations = async (req: AuthRequest, res: Response): Promis
         if (lastSenderId && lastTime) {
           lastMessageStatus = lastMessageRowStatus(lastSenderId, meId, lastTime, myLastRead, otherLastRead, now);
         }
+        if (mySettings.manualUnread && lastSenderId && !lastSenderId.equals(meId) && lastTime) {
+          lastMessageStatus = 'received';
+        }
 
         return {
           id: cid,
@@ -163,11 +183,23 @@ export const listConversations = async (req: AuthRequest, res: Response): Promis
           lastMessagePreview: c.lastMessagePreview,
           lastMessageSenderId: lastSenderId?.toString(),
           lastMessageStatus,
+          mySettings,
+          isLocked: Boolean((c as { isLocked?: boolean }).isLocked),
         };
       })
     );
 
-    res.json({ conversations: out.filter((x): x is NonNullable<typeof x> => x != null) });
+    const rows = out.filter((x): x is NonNullable<typeof x> => x != null);
+    rows.sort((a, b) => {
+      if (a.mySettings.favorite !== b.mySettings.favorite) {
+        return a.mySettings.favorite ? -1 : 1;
+      }
+      const at = a.lastMessageAt ?? '';
+      const bt = b.lastMessageAt ?? '';
+      return bt.localeCompare(at);
+    });
+
+    res.json({ conversations: rows });
   } catch (e) {
     console.error('[chat] listConversations', e);
     res.status(500).json({ error: 'Failed to list conversations' });
@@ -474,6 +506,86 @@ export const markConversationRead = async (req: AuthRequest, res: Response): Pro
   } catch (e) {
     console.error('[chat] markConversationRead', e);
     res.status(500).json({ error: 'Failed to mark read' });
+  }
+};
+
+/** PATCH /api/conversations/:conversationId/settings — per-user archive, mute, favorite, list tag */
+export const patchConversationSettings = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
+      res.status(400).json({ error: 'Invalid conversationId' });
+      return;
+    }
+    const body = req.body as {
+      archived?: boolean;
+      muted?: boolean;
+      favorite?: boolean;
+      listTag?: string | null;
+      manualUnread?: boolean;
+    };
+    const result = await patchParticipantSettings(meId, conversationId, body);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ settings: result.settings });
+  } catch (e) {
+    console.error('[chat] patchConversationSettings', e);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+};
+
+/** POST /api/conversations/:conversationId/clear — delete all messages (both participants) */
+export const clearConversationHandler = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    const result = await clearConversationMessages(meId, conversationId);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[chat] clearConversationHandler', e);
+    res.status(500).json({ error: 'Failed to clear chat' });
+  }
+};
+
+/** POST /api/conversations/:conversationId/mark-unread */
+export const markConversationUnreadHandler = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    const result = await markConversationUnreadByUser(meId, conversationId);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[chat] markConversationUnreadHandler', e);
+    res.status(500).json({ error: 'Failed to mark unread' });
+  }
+};
+
+/** POST /api/conversations/:conversationId/lock — body: { locked: boolean } */
+export const postConversationLockHandler = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    const locked = Boolean((req.body as { locked?: boolean })?.locked);
+    const result = await setConversationLocked(meId, conversationId, locked);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ ok: true, isLocked: locked });
+  } catch (e) {
+    console.error('[chat] postConversationLockHandler', e);
+    res.status(500).json({ error: 'Failed to update lock' });
   }
 };
 
