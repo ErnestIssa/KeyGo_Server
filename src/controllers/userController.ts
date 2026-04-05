@@ -4,6 +4,12 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import User, { type IUser } from '../models/User';
+import {
+  DEFAULT_APP_SETTINGS,
+  mergeAppSettings,
+  patchAppSettings,
+  type AppSettingsShape,
+} from '../models/userSettings';
 import { generateToken } from '../utils/jwt';
 import { AuthRequest } from '../middleware/auth';
 import { formatChatDisplayName } from '../utils/displayName';
@@ -17,17 +23,29 @@ const ALLOWED_MIME: Record<string, string> = {
   'image/webp': 'webp',
 };
 
-export function toPublicUser(user: {
-  _id: unknown;
-  email: string;
-  name: string;
-  firstName?: string | null;
-  lastName?: string | null;
-  role: string;
-  avatarUrl?: string | null;
-  ratingAverage?: number | null;
-  phone?: string | null;
-}) {
+function serializeAddress(u: IUser) {
+  const a = u.address;
+  if (!a || typeof a !== 'object') {
+    return {
+      line1: '',
+      line2: '',
+      city: '',
+      region: '',
+      postalCode: '',
+      country: '',
+    };
+  }
+  return {
+    line1: typeof a.line1 === 'string' ? a.line1 : '',
+    line2: typeof a.line2 === 'string' ? a.line2 : '',
+    city: typeof a.city === 'string' ? a.city : '',
+    region: typeof a.region === 'string' ? a.region : '',
+    postalCode: typeof a.postalCode === 'string' ? a.postalCode : '',
+    country: typeof a.country === 'string' ? a.country : '',
+  };
+}
+
+export function toPublicUser(user: IUser) {
   const raRaw = user.ratingAverage;
   const ratingAverage =
     typeof raRaw === 'number' && !Number.isNaN(raRaw)
@@ -36,6 +54,8 @@ export function toPublicUser(user: {
   const fn = user.firstName?.trim();
   const ln = user.lastName?.trim();
   const ph = typeof user.phone === 'string' && user.phone.trim() ? user.phone.trim() : undefined;
+  const accountKind = user.accountKind === 'organization' ? 'organization' : 'individual';
+  const appSettings = mergeAppSettings(user.appSettings as unknown);
   return {
     id: String(user._id),
     email: user.email,
@@ -47,6 +67,11 @@ export function toPublicUser(user: {
     avatarUrl: user.avatarUrl || undefined,
     ratingAverage,
     ...(ph ? { phone: ph } : {}),
+    accountKind,
+    ...(user.organizationName ? { organizationName: user.organizationName } : {}),
+    ...(user.organizationType ? { organizationType: user.organizationType } : {}),
+    address: serializeAddress(user),
+    appSettings,
   };
 }
 
@@ -90,6 +115,9 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       name?: string;
       role?: string;
       phone?: string;
+      accountKind?: string;
+      organizationName?: string;
+      organizationType?: string;
     };
     const { email, password, role } = body;
 
@@ -107,6 +135,18 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     }
     const { firstName: fn, lastName: ln } = parsed;
     const fullName = `${fn} ${ln}`;
+
+    const accountKind = body.accountKind === 'organization' ? 'organization' : 'individual';
+    let displayName = fullName;
+    let organizationName: string | undefined;
+    if (accountKind === 'organization') {
+      organizationName = typeof body.organizationName === 'string' ? body.organizationName.trim() : '';
+      if (!organizationName) {
+        res.status(400).json({ error: 'Organization name is required for business accounts' });
+        return;
+      }
+      displayName = organizationName;
+    }
 
     if (password.length < 6) {
       res.status(400).json({ error: 'Password must be at least 6 characters' });
@@ -134,15 +174,24 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     const hashed = await bcrypt.hash(password, 10);
 
+    const orgType =
+      accountKind === 'organization' && typeof body.organizationType === 'string' && body.organizationType.trim()
+        ? body.organizationType.trim().slice(0, 120)
+        : undefined;
+
     const user = await User.create({
       email: email.toLowerCase().trim(),
       password: hashed,
-      name: fullName,
+      name: displayName,
       firstName: fn,
       lastName: ln,
       role,
       driverApproved: true,
       phone: phoneNormalized,
+      accountKind,
+      organizationName: accountKind === 'organization' ? organizationName : undefined,
+      organizationType: orgType,
+      appSettings: DEFAULT_APP_SETTINGS,
     });
 
     res.status(201).json(authPayload(user));
@@ -412,5 +461,69 @@ export const uploadAvatar = async (req: AuthRequest, res: Response): Promise<voi
     res.json({ user: toPublicUser(updated) });
   } catch (error) {
     res.status(500).json({ error: 'Avatar upload failed' });
+  }
+};
+
+/** PATCH /api/users/settings — merge partial app settings (privacy, accessibility, …). */
+export const patchUserSettings = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const current = req.user as IUser | undefined;
+    if (!current) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+    const patch = req.body as Partial<AppSettingsShape>;
+    const merged = mergeAppSettings(current.appSettings);
+    const next = patchAppSettings(merged, patch);
+    const updated = await User.findByIdAndUpdate(current._id, { appSettings: next }, { new: true }).select(
+      '-password'
+    );
+    if (!updated) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    res.json({ user: toPublicUser(updated) });
+  } catch (e) {
+    console.error('[users] patchUserSettings', e);
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+};
+
+/** PATCH /api/users/address — save mailing / handoff address fields. */
+export const patchUserAddress = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const current = req.user as IUser | undefined;
+    if (!current) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+    const patch = req.body as Partial<{
+      line1: string;
+      line2: string;
+      city: string;
+      region: string;
+      postalCode: string;
+      country: string;
+    }>;
+    const prev = serializeAddress(current);
+    const merged = {
+      line1: patch.line1 !== undefined ? String(patch.line1).trim() : prev.line1,
+      line2: patch.line2 !== undefined ? String(patch.line2).trim() : prev.line2,
+      city: patch.city !== undefined ? String(patch.city).trim() : prev.city,
+      region: patch.region !== undefined ? String(patch.region).trim() : prev.region,
+      postalCode: patch.postalCode !== undefined ? String(patch.postalCode).trim() : prev.postalCode,
+      country: patch.country !== undefined ? String(patch.country).trim() : prev.country,
+    };
+    const updated = await User.findByIdAndUpdate(current._id, { address: merged }, { new: true }).select(
+      '-password'
+    );
+    if (!updated) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    res.json({ user: toPublicUser(updated) });
+  } catch (e) {
+    console.error('[users] patchUserAddress', e);
+    res.status(500).json({ error: 'Failed to save address' });
   }
 };

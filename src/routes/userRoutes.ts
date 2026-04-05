@@ -8,6 +8,8 @@ import {
   registerPushToken,
   uploadAvatar,
   updateRole,
+  patchUserSettings,
+  patchUserAddress,
 } from '../controllers/userController';
 import { authenticate } from '../middleware/auth';
 
@@ -20,6 +22,8 @@ router.get('/profile', authenticate, getProfile);
 router.post('/push-token', authenticate, registerPushToken);
 router.get('/public/:userId', authenticate, getPublicProfile);
 router.patch('/role', authenticate, updateRole);
+router.patch('/settings', authenticate, patchUserSettings);
+router.patch('/address', authenticate, patchUserAddress);
 router.post('/avatar', authenticate, uploadAvatar);
 
 export default router;

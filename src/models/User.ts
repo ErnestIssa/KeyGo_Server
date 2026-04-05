@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { DEFAULT_APP_SETTINGS } from './userSettings';
 
 export interface IUser extends Document {
   email: string;
@@ -21,9 +22,80 @@ export interface IUser extends Document {
   expoPushToken?: string;
   /** User can disable push from app settings. */
   notificationsEnabled?: boolean;
+  /** Personal vs business account (dealers, fleets, etc.). */
+  accountKind?: 'individual' | 'organization';
+  /** Business display name when accountKind === organization. */
+  organizationName?: string;
+  /** e.g. dealer, fleet, rental — free text. */
+  organizationType?: string;
+  /** Mailing / handoff address — all optional until user fills profile. */
+  address?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    region?: string;
+    postalCode?: string;
+    country?: string;
+  };
+  /** App preferences — merged with defaults in API. */
+  appSettings?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const AddressSchema = new Schema(
+  {
+    line1: { type: String, trim: true },
+    line2: { type: String, trim: true },
+    city: { type: String, trim: true },
+    region: { type: String, trim: true },
+    postalCode: { type: String, trim: true },
+    country: { type: String, trim: true },
+  },
+  { _id: false }
+);
+
+const AppSettingsSchema = new Schema(
+  {
+    privacy: {
+      profileVisibility: {
+        type: String,
+        enum: ['everyone', 'drivers_only', 'minimal'],
+        default: DEFAULT_APP_SETTINGS.privacy.profileVisibility,
+      },
+      shareAnalytics: { type: Boolean, default: DEFAULT_APP_SETTINGS.privacy.shareAnalytics },
+    },
+    accessibility: {
+      reduceMotion: { type: Boolean, default: DEFAULT_APP_SETTINGS.accessibility.reduceMotion },
+      boldText: { type: Boolean, default: DEFAULT_APP_SETTINGS.accessibility.boldText },
+    },
+    nightMode: {
+      type: String,
+      enum: ['system', 'light', 'dark'],
+      default: DEFAULT_APP_SETTINGS.nightMode,
+    },
+    shortcuts: {
+      enabled: { type: Boolean, default: DEFAULT_APP_SETTINGS.shortcuts.enabled },
+    },
+    communication: {
+      email: { type: Boolean, default: DEFAULT_APP_SETTINGS.communication.email },
+      push: { type: Boolean, default: DEFAULT_APP_SETTINGS.communication.push },
+      sms: { type: Boolean, default: DEFAULT_APP_SETTINGS.communication.sms },
+    },
+    navigation: {
+      preferredMaps: {
+        type: String,
+        enum: ['google', 'apple', 'waze'],
+        default: DEFAULT_APP_SETTINGS.navigation.preferredMaps,
+      },
+    },
+    soundsVoice: {
+      messageSounds: { type: Boolean, default: DEFAULT_APP_SETTINGS.soundsVoice.messageSounds },
+      voiceGuidance: { type: Boolean, default: DEFAULT_APP_SETTINGS.soundsVoice.voiceGuidance },
+    },
+  },
+  { _id: false }
+);
 
 const UserSchema: Schema = new Schema(
   {
@@ -82,6 +154,29 @@ const UserSchema: Schema = new Schema(
     notificationsEnabled: {
       type: Boolean,
       default: true,
+    },
+    accountKind: {
+      type: String,
+      enum: ['individual', 'organization'],
+      default: 'individual',
+    },
+    organizationName: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+    },
+    organizationType: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+    },
+    address: {
+      type: AddressSchema,
+      default: undefined,
+    },
+    appSettings: {
+      type: AppSettingsSchema,
+      default: undefined,
     },
   },
   {

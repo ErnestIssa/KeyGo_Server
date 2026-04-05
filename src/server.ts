@@ -11,6 +11,7 @@ import { connectDatabase } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import userRoutes from './routes/userRoutes';
 import authRoutes from './routes/authRoutes';
+import publicRoutes from './routes/publicRoutes';
 import tripRoutes from './routes/tripRoutes';
 import vehicleRoutes from './routes/vehicleRoutes';
 import chatRoutes from './routes/chatRoutes';
@@ -136,6 +137,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.use('/api/public', publicRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
