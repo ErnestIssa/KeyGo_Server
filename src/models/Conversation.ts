@@ -32,6 +32,8 @@ export interface IConversation extends Document {
   lastMessagePreview?: string;
   /** Denormalized sender of the latest message (for list row status). */
   lastMessageSenderId?: Types.ObjectId;
+  /** Pinned message in thread (both participants see it). */
+  pinnedMessageId?: Types.ObjectId;
 }
 
 const ConversationSchema = new Schema<IConversation>(
@@ -55,6 +57,7 @@ const ConversationSchema = new Schema<IConversation>(
     lastMessageAt: { type: Date },
     lastMessagePreview: { type: String, maxlength: 280 },
     lastMessageSenderId: { type: Schema.Types.ObjectId, ref: 'User' },
+    pinnedMessageId: { type: Schema.Types.ObjectId, ref: 'Message', default: null },
     readReceipts: {
       type: [
         {

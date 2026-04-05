@@ -1,8 +1,14 @@
 import { Types } from 'mongoose';
 import type { Server } from 'socket.io';
+import type { MessageKind } from '../models/Message';
 import Conversation from '../models/Conversation';
 import User from '../models/User';
-import { createChatMessage, ChatMessageError } from '../services/chatMessageService';
+import {
+  ChatMessageError,
+  createChatMessage,
+  markMessageDelivered,
+  type CreateChatMessageOpts,
+} from '../services/chatMessageService';
 import { markConversationReadByUser } from '../services/conversationReadService';
 import { verifyToken } from '../utils/jwt';
 
@@ -74,7 +80,16 @@ export function setupChatSocket(io: Server): void {
     socket.on(
       'send_message',
       async (
-        payload: { conversationId?: string; text?: string; senderId?: string },
+        payload: {
+          conversationId?: string;
+          text?: string;
+          kind?: MessageKind;
+          mediaUrl?: string;
+          fileName?: string;
+          mimeType?: string;
+          durationSec?: number;
+          replyToMessageId?: string;
+        },
         ack?: (result: { ok: true } | { ok: false; error: string }) => void
       ) => {
         try {
@@ -84,7 +99,15 @@ export function setupChatSocket(io: Server): void {
             ack?.({ ok: false, error: 'conversationId and text required' });
             return;
           }
-          const { message } = await createChatMessage(userId, conversationId, text);
+          const opts: CreateChatMessageOpts = {
+            kind: payload.kind,
+            mediaUrl: payload.mediaUrl,
+            fileName: payload.fileName,
+            mimeType: payload.mimeType,
+            durationSec: payload.durationSec,
+            replyToMessageId: payload.replyToMessageId,
+          };
+          const { message } = await createChatMessage(userId, conversationId, text, opts);
           io.to(roomForConversation(conversationId)).emit('new_message', { message });
           ack?.({ ok: true });
         } catch (e) {
@@ -94,6 +117,34 @@ export function setupChatSocket(io: Server): void {
           }
           console.error('[socket] send_message', e);
           ack?.({ ok: false, error: 'Failed to send' });
+        }
+      }
+    );
+
+    socket.on(
+      'message_delivered',
+      async (
+        payload: { messageId?: string },
+        ack?: (result: { ok: true } | { ok: false; error?: string }) => void
+      ) => {
+        try {
+          const messageId = payload?.messageId;
+          if (!messageId) {
+            ack?.({ ok: false, error: 'messageId required' });
+            return;
+          }
+          const result = await markMessageDelivered(userId, messageId);
+          if (result) {
+            io.to(roomForConversation(result.conversationId)).emit('message_delivery', {
+              conversationId: result.conversationId,
+              messageId: result.messageId,
+              deliveredAt: new Date().toISOString(),
+            });
+          }
+          ack?.({ ok: true });
+        } catch (e) {
+          console.error('[socket] message_delivered', e);
+          ack?.({ ok: false, error: 'Failed' });
         }
       }
     );

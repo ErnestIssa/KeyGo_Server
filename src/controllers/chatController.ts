@@ -1,14 +1,16 @@
+import type { Express } from 'express';
 import { Response } from 'express';
 import { Types } from 'mongoose';
 import Conversation from '../models/Conversation';
 import type { IParticipantSettings } from '../models/Conversation';
 import Message from '../models/Message';
+import Report from '../models/Report';
 import Trip from '../models/Trip';
 import User from '../models/User';
 import { AuthRequest } from '../middleware/auth';
 import { areUsersMatched, sortedParticipantPair } from '../utils/matchedUsers';
 import { formatChatDisplayName } from '../utils/displayName';
-import { broadcastMessagesRead } from '../realtime/chatRealtime';
+import { broadcastMessagesRead, broadcastToConversation } from '../realtime/chatRealtime';
 import { markConversationReadByUser, markConversationUnreadByUser } from '../services/conversationReadService';
 import {
   clearConversationMessages,
@@ -16,13 +18,18 @@ import {
   patchParticipantSettings,
   setConversationLocked,
 } from '../services/conversationSettingsService';
-import { createChatMessage, ChatMessageError } from '../services/chatMessageService';
 import {
-  isInboundUnread,
-  lastMessageRowStatus,
-  outgoingMessageUiStatus,
-  receiptForUser,
-} from '../utils/chatReadStatus';
+  ChatMessageError,
+  createCallLogMessage,
+  createChatMessage,
+  deleteChatMessage,
+  listMessagesForUser,
+  setMessageReaction,
+  setMessageStarred,
+  setPinnedMessage,
+  type CreateChatMessageOpts,
+} from '../services/chatMessageService';
+import { lastMessageRowStatus, receiptForUser } from '../utils/chatReadStatus';
 
 function publicUser(u: {
   _id: Types.ObjectId;
@@ -206,16 +213,34 @@ export const listConversations = async (req: AuthRequest, res: Response): Promis
   }
 };
 
-/** POST /api/messages — body: { conversationId, text } */
+/** POST /api/messages — body: { conversationId, text, kind?, mediaUrl?, ... } */
 export const postMessage = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const meId = (req.user as { _id: Types.ObjectId })._id;
-    const { conversationId, text } = req.body as { conversationId?: string; text?: string };
-    if (!conversationId) {
+    const body = req.body as {
+      conversationId?: string;
+      text?: string;
+      kind?: CreateChatMessageOpts['kind'];
+      mediaUrl?: string;
+      fileName?: string;
+      mimeType?: string;
+      durationSec?: number;
+      replyToMessageId?: string;
+    };
+    if (!body.conversationId) {
       res.status(400).json({ error: 'conversationId is required' });
       return;
     }
-    const { message } = await createChatMessage(meId, conversationId, text ?? '');
+    const opts: CreateChatMessageOpts = {
+      kind: body.kind,
+      mediaUrl: body.mediaUrl,
+      fileName: body.fileName,
+      mimeType: body.mimeType,
+      durationSec: body.durationSec,
+      replyToMessageId: body.replyToMessageId,
+    };
+    const { message } = await createChatMessage(meId, body.conversationId, body.text ?? '', opts);
+    broadcastToConversation(body.conversationId, 'new_message', { message });
     res.status(201).json({ message });
   } catch (e) {
     if (e instanceof ChatMessageError) {
@@ -236,70 +261,227 @@ export const listMessages = async (req: AuthRequest, res: Response): Promise<voi
       res.status(400).json({ error: 'Invalid conversationId' });
       return;
     }
-
-    const conv = await Conversation.findById(conversationId);
-    if (!conv) {
-      res.status(404).json({ error: 'Conversation not found' });
+    const data = await listMessagesForUser(meId, conversationId);
+    res.json({
+      peerLastReadAt: data.peerLastReadAt,
+      pinnedMessageId: data.pinnedMessageId,
+      messages: data.messages,
+    });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
       return;
     }
-    if (!conv.participants.some((p) => p.equals(meId))) {
+    console.error('[chat] listMessages', e);
+    res.status(500).json({ error: 'Failed to load messages' });
+  }
+};
+
+export const postCallLog = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    const { callKind, status, durationSec } = req.body as {
+      callKind?: 'voice' | 'video';
+      status?: 'completed' | 'missed' | 'declined';
+      durationSec?: number;
+    };
+    if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
+      res.status(400).json({ error: 'Invalid conversationId' });
+      return;
+    }
+    if (callKind !== 'voice' && callKind !== 'video') {
+      res.status(400).json({ error: 'callKind required' });
+      return;
+    }
+    if (status !== 'completed' && status !== 'missed' && status !== 'declined') {
+      res.status(400).json({ error: 'status required' });
+      return;
+    }
+    const { message } = await createCallLogMessage(meId, conversationId, {
+      callKind,
+      status,
+      durationSec,
+    });
+    broadcastToConversation(conversationId, 'new_message', { message });
+    res.status(201).json({ message });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] postCallLog', e);
+    res.status(500).json({ error: 'Failed to log call' });
+  }
+};
+
+export const patchMessageReaction = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { messageId } = req.params;
+    const { emoji } = req.body as { emoji?: string | null };
+    const result = await setMessageReaction(meId, messageId, emoji ?? null);
+    if (!result) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    broadcastToConversation(result.conversationId, 'message_updated', { message: result.message });
+    res.json({ message: result.message });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] patchMessageReaction', e);
+    res.status(500).json({ error: 'Failed' });
+  }
+};
+
+export const patchMessageStar = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { messageId } = req.params;
+    const { starred } = req.body as { starred?: boolean };
+    const result = await setMessageStarred(meId, messageId, Boolean(starred));
+    if (!result) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    broadcastToConversation(result.conversationId, 'message_updated', { message: result.message });
+    res.json({ message: result.message });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] patchMessageStar', e);
+    res.status(500).json({ error: 'Failed' });
+  }
+};
+
+export const patchConversationPin = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { conversationId } = req.params;
+    const { messageId } = req.body as { messageId?: string | null };
+    await setPinnedMessage(meId, conversationId, messageId ?? null);
+    res.json({ ok: true });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] patchConversationPin', e);
+    res.status(500).json({ error: 'Failed' });
+  }
+};
+
+export const deleteMessageHandler = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { messageId } = req.params;
+    const { forEveryone } = req.body as { forEveryone?: boolean };
+    const result = await deleteChatMessage(meId, messageId, Boolean(forEveryone));
+    if (!result) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    broadcastToConversation(result.conversationId, 'message_updated', { message: result.message });
+    res.json({ message: result.message });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] deleteMessageHandler', e);
+    res.status(500).json({ error: 'Failed to delete' });
+  }
+};
+
+/** POST /api/messages/upload — multipart: file, conversationId, kind, optional caption, durationSec */
+export const postMessageUpload = async (
+  req: AuthRequest & { file?: Express.Multer.File },
+  res: Response
+): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'file is required' });
+      return;
+    }
+    const conversationId = String(req.body?.conversationId ?? '');
+    const kind = req.body?.kind as CreateChatMessageOpts['kind'];
+    if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
+      res.status(400).json({ error: 'conversationId required' });
+      return;
+    }
+    if (!kind || !['image', 'video', 'file', 'audio'].includes(kind)) {
+      res.status(400).json({ error: 'kind must be image, video, file, or audio' });
+      return;
+    }
+    const caption = typeof req.body?.caption === 'string' ? req.body.caption : '';
+    const durationSec =
+      req.body?.durationSec != null && req.body.durationSec !== ''
+        ? Number(req.body.durationSec)
+        : undefined;
+    const mediaUrl = `/uploads/chat/${file.filename}`;
+    const opts: CreateChatMessageOpts = {
+      kind,
+      mediaUrl,
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      durationSec: Number.isFinite(durationSec as number) ? durationSec : undefined,
+    };
+    const { message } = await createChatMessage(meId, conversationId, caption, opts);
+    broadcastToConversation(conversationId, 'new_message', { message });
+    res.status(201).json({ message });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] postMessageUpload', e);
+    res.status(500).json({ error: 'Failed to upload message' });
+  }
+};
+
+/** POST /api/messages/:messageId/report */
+export const postReportMessage = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const { messageId } = req.params;
+    const { reason, block } = req.body as { reason?: string; block?: boolean };
+    if (!messageId || !Types.ObjectId.isValid(messageId)) {
+      res.status(400).json({ error: 'Invalid message' });
+      return;
+    }
+    const msg = await Message.findById(messageId);
+    if (!msg || msg.deletedAt) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+    const conv = await Conversation.findById(msg.conversationId);
+    if (!conv || !conv.participants.some((p) => p.equals(meId))) {
       res.status(403).json({ error: 'Not a participant' });
       return;
     }
-
-    const messages = await Message.find({ conversationId: conv._id })
-      .sort({ createdAt: 1 })
-      .limit(200)
-      .lean();
-
-    const otherParticipant = conv.participants.find((p) => !p.equals(meId));
-    const receipts = (conv.readReceipts ?? []) as { user: Types.ObjectId; lastReadAt: Date }[];
-    const myLastRead = receiptForUser(receipts, meId);
-    const peerLastRead = otherParticipant ? receiptForUser(receipts, otherParticipant) : undefined;
-
-    const senderIds = [...new Set(messages.map((m) => m.senderId.toString()))];
-    const senders = await User.find({ _id: { $in: senderIds } })
-      .select('name firstName lastName avatarUrl')
-      .lean();
-    const senderMap = new Map(
-      senders.map((u) => {
-        const id = (u._id as Types.ObjectId).toString();
-        return [
-          id,
-          {
-            displayName: formatChatDisplayName(u.firstName, u.lastName, u.name),
-            fullName: u.name,
-            avatarUrl: u.avatarUrl || undefined,
-          },
-        ] as const;
-      })
-    );
-
-    res.json({
-      peerLastReadAt: peerLastRead ? peerLastRead.toISOString() : null,
-      messages: messages.map((m) => {
-        const sid = m.senderId.toString();
-        const meta = senderMap.get(sid);
-        const mine = m.senderId.equals(meId);
-        const isUnread = !mine && isInboundUnread(m.createdAt, myLastRead);
-        const deliveryStatus = mine ? outgoingMessageUiStatus(m.createdAt, peerLastRead) : undefined;
-        return {
-          id: m._id.toString(),
-          conversationId: conv._id.toString(),
-          senderId: sid,
-          text: m.text,
-          createdAt: m.createdAt,
-          senderDisplayName: meta?.displayName ?? 'User',
-          senderName: meta?.fullName ?? 'User',
-          senderAvatarUrl: meta?.avatarUrl,
-          isUnread,
-          deliveryStatus,
-        };
-      }),
+    if (msg.senderId.equals(meId)) {
+      res.status(400).json({ error: 'Cannot report your own message' });
+      return;
+    }
+    await Report.create({
+      reporterId: meId,
+      reportedUserId: msg.senderId,
+      conversationId: msg.conversationId,
+      messageId: msg._id,
+      kind: 'message',
+      reason: reason?.trim().slice(0, 2000),
     });
+    res.json({ ok: true, blockRequested: Boolean(block) });
   } catch (e) {
-    console.error('[chat] listMessages', e);
-    res.status(500).json({ error: 'Failed to load messages' });
+    console.error('[chat] postReportMessage', e);
+    res.status(500).json({ error: 'Failed to submit report' });
   }
 };
 

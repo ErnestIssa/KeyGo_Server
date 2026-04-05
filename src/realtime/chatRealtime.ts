@@ -24,3 +24,7 @@ export function broadcastMessagesRead(
     ?.to(roomForConversation(conversationId))
     .emit('messages_read', { conversationId, readerId, readAt: readAtIso });
 }
+
+export function broadcastToConversation(conversationId: string, event: string, payload: unknown): void {
+  ioRef?.to(roomForConversation(conversationId)).emit(event, payload);
+}

@@ -19,6 +19,7 @@ import { setupChatSocket } from './realtime/chatSocket';
 import { listAvailableTrips } from './controllers/tripController';
 import { authenticate } from './middleware/auth';
 import { printListenUrls } from './utils/printListenUrls';
+import './models/Report';
 
 const app: Application = express();
 
@@ -118,12 +119,16 @@ app.use(express.urlencoded({ extended: true, limit: '3mb' }));
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const avatarsDir = path.join(uploadsDir, 'avatars');
+const chatUploadDir = path.join(uploadsDir, 'chat');
 try {
   if (!fs.existsSync(avatarsDir)) {
     fs.mkdirSync(avatarsDir, { recursive: true });
   }
+  if (!fs.existsSync(chatUploadDir)) {
+    fs.mkdirSync(chatUploadDir, { recursive: true });
+  }
 } catch {
-  console.warn('[KeyGo] Could not create uploads/avatars directory');
+  console.warn('[KeyGo] Could not create uploads directories');
 }
 app.use('/uploads', express.static(uploadsDir));
 

@@ -26,6 +26,7 @@ export function toPublicUser(user: {
   role: string;
   avatarUrl?: string | null;
   ratingAverage?: number | null;
+  phone?: string | null;
 }) {
   const raRaw = user.ratingAverage;
   const ratingAverage =
@@ -34,6 +35,7 @@ export function toPublicUser(user: {
       : 5;
   const fn = user.firstName?.trim();
   const ln = user.lastName?.trim();
+  const ph = typeof user.phone === 'string' && user.phone.trim() ? user.phone.trim() : undefined;
   return {
     id: String(user._id),
     email: user.email,
@@ -44,6 +46,7 @@ export function toPublicUser(user: {
     role: user.role,
     avatarUrl: user.avatarUrl || undefined,
     ratingAverage,
+    ...(ph ? { phone: ph } : {}),
   };
 }
 
@@ -86,6 +89,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       lastName?: string;
       name?: string;
       role?: string;
+      phone?: string;
     };
     const { email, password, role } = body;
 
@@ -114,6 +118,14 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    const rawPhone = typeof body.phone === 'string' ? body.phone.trim() : '';
+    const phoneDigits = rawPhone.replace(/\D/g, '');
+    if (!rawPhone || phoneDigits.length < 7 || phoneDigits.length > 15) {
+      res.status(400).json({ error: 'A valid phone number is required (7–15 digits)' });
+      return;
+    }
+    const phoneNormalized = rawPhone.startsWith('+') ? `+${phoneDigits}` : phoneDigits;
+
     const existing = await User.findOne({ email: email.toLowerCase().trim() });
     if (existing) {
       res.status(409).json({ error: 'Email already registered' });
@@ -130,6 +142,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       lastName: ln,
       role,
       driverApproved: true,
+      phone: phoneNormalized,
     });
 
     res.status(201).json(authPayload(user));

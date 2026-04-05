@@ -15,6 +15,8 @@ export interface IUser extends Document {
   avatarUrl?: string;
   /** Display rating 0–5 (e.g. from reviews); defaults in API response when unset. */
   ratingAverage?: number;
+  /** E.164 or local digits; collected at signup for contact / calls. */
+  phone?: string;
   /** Expo push token for remote notifications (mobile). */
   expoPushToken?: string;
   /** User can disable push from app settings. */
@@ -58,6 +60,11 @@ const UserSchema: Schema = new Schema(
     driverApproved: {
       type: Boolean,
       default: true,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 32,
     },
     avatarUrl: {
       type: String,
