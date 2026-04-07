@@ -43,10 +43,15 @@ export async function notifyNewChatMessage(opts: {
     if (muted) return;
   }
 
-  const u = await User.findById(opts.recipientId).select('expoPushToken notificationsEnabled').lean();
+  const u = await User.findById(opts.recipientId).select('expoPushToken notificationsEnabled appSettings').lean();
   if (!u) return;
-  const doc = u as { expoPushToken?: string; notificationsEnabled?: boolean };
+  const doc = u as {
+    expoPushToken?: string;
+    notificationsEnabled?: boolean;
+    appSettings?: { communication?: { push?: boolean } };
+  };
   if (doc.notificationsEnabled === false) return;
+  if (doc.appSettings?.communication?.push === false) return;
   const token = doc.expoPushToken;
   if (!token) return;
 
