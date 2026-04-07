@@ -93,6 +93,14 @@ const AppSettingsSchema = new Schema(
       messageSounds: { type: Boolean, default: DEFAULT_APP_SETTINGS.soundsVoice.messageSounds },
       voiceGuidance: { type: Boolean, default: DEFAULT_APP_SETTINGS.soundsVoice.voiceGuidance },
     },
+    safety: {
+      pinVerificationEnabled: { type: Boolean, default: DEFAULT_APP_SETTINGS.safety.pinVerificationEnabled },
+      followMyTripEnabled: { type: Boolean, default: DEFAULT_APP_SETTINGS.safety.followMyTripEnabled },
+      tripCheckNotificationsEnabled: {
+        type: Boolean,
+        default: DEFAULT_APP_SETTINGS.safety.tripCheckNotificationsEnabled,
+      },
+    },
   },
   { _id: false }
 );

@@ -27,6 +27,12 @@ export type AppSettingsShape = {
     messageSounds: boolean;
     voiceGuidance: boolean;
   };
+  /** Trust & trip safety preferences (mobile Safety hub). */
+  safety: {
+    pinVerificationEnabled: boolean;
+    followMyTripEnabled: boolean;
+    tripCheckNotificationsEnabled: boolean;
+  };
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettingsShape = {
@@ -52,12 +58,26 @@ export const DEFAULT_APP_SETTINGS: AppSettingsShape = {
     messageSounds: true,
     voiceGuidance: false,
   },
+  safety: {
+    pinVerificationEnabled: true,
+    followMyTripEnabled: false,
+    tripCheckNotificationsEnabled: true,
+  },
 };
 
 export function mergeAppSettings(partial: unknown): AppSettingsShape {
   const d = DEFAULT_APP_SETTINGS;
   if (!partial || typeof partial !== 'object') {
-    return { ...d, privacy: { ...d.privacy }, accessibility: { ...d.accessibility }, shortcuts: { ...d.shortcuts }, communication: { ...d.communication }, navigation: { ...d.navigation }, soundsVoice: { ...d.soundsVoice } };
+    return {
+      ...d,
+      privacy: { ...d.privacy },
+      accessibility: { ...d.accessibility },
+      shortcuts: { ...d.shortcuts },
+      communication: { ...d.communication },
+      navigation: { ...d.navigation },
+      soundsVoice: { ...d.soundsVoice },
+      safety: { ...d.safety },
+    };
   }
   const p = partial as Record<string, unknown>;
   const priv = typeof p.privacy === 'object' && p.privacy ? (p.privacy as Record<string, unknown>) : {};
@@ -66,6 +86,7 @@ export function mergeAppSettings(partial: unknown): AppSettingsShape {
   const nav = typeof p.navigation === 'object' && p.navigation ? (p.navigation as Record<string, unknown>) : {};
   const sv = typeof p.soundsVoice === 'object' && p.soundsVoice ? (p.soundsVoice as Record<string, unknown>) : {};
   const sh = typeof p.shortcuts === 'object' && p.shortcuts ? (p.shortcuts as Record<string, unknown>) : {};
+  const sf = typeof p.safety === 'object' && p.safety ? (p.safety as Record<string, unknown>) : {};
 
   const vis = priv.profileVisibility;
   const profileVisibility =
@@ -105,6 +126,18 @@ export function mergeAppSettings(partial: unknown): AppSettingsShape {
       voiceGuidance:
         typeof sv.voiceGuidance === 'boolean' ? sv.voiceGuidance : d.soundsVoice.voiceGuidance,
     },
+    safety: {
+      pinVerificationEnabled:
+        typeof sf.pinVerificationEnabled === 'boolean'
+          ? sf.pinVerificationEnabled
+          : d.safety.pinVerificationEnabled,
+      followMyTripEnabled:
+        typeof sf.followMyTripEnabled === 'boolean' ? sf.followMyTripEnabled : d.safety.followMyTripEnabled,
+      tripCheckNotificationsEnabled:
+        typeof sf.tripCheckNotificationsEnabled === 'boolean'
+          ? sf.tripCheckNotificationsEnabled
+          : d.safety.tripCheckNotificationsEnabled,
+    },
   };
 }
 
@@ -118,5 +151,6 @@ export function patchAppSettings(base: AppSettingsShape, patch: Partial<AppSetti
     communication: { ...base.communication, ...patch.communication },
     navigation: { ...base.navigation, ...patch.navigation },
     soundsVoice: { ...base.soundsVoice, ...patch.soundsVoice },
+    safety: { ...base.safety, ...patch.safety },
   };
 }

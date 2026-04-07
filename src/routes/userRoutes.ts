@@ -11,6 +11,7 @@ import {
   patchUserSettings,
   patchUserAddress,
 } from '../controllers/userController';
+import { listInbox, postSupportMessage, markInboxRead } from '../controllers/inboxController';
 import { authenticate } from '../middleware/auth';
 
 const router = Router();
@@ -24,6 +25,9 @@ router.get('/public/:userId', authenticate, getPublicProfile);
 router.patch('/role', authenticate, updateRole);
 router.patch('/settings', authenticate, patchUserSettings);
 router.patch('/address', authenticate, patchUserAddress);
+router.get('/inbox', authenticate, listInbox);
+router.post('/inbox/support', authenticate, postSupportMessage);
+router.patch('/inbox/:id/read', authenticate, markInboxRead);
 router.post('/avatar', authenticate, uploadAvatar);
 
 export default router;
