@@ -45,6 +45,19 @@ export function setupChatSocket(io: Server): void {
   io.on('connection', (socket) => {
     const userId = new Types.ObjectId((socket.data as { userId: string }).userId);
 
+    /** Join all conversation rooms immediately so clients never miss `new_message` before `join_conversation` runs. */
+    void (async () => {
+      try {
+        const convs = await Conversation.find({ participants: userId }).select('_id').lean();
+        for (const doc of convs) {
+          const id = (doc._id as Types.ObjectId).toString();
+          await socket.join(roomForConversation(id));
+        }
+      } catch (e) {
+        console.error('[socket] auto-join conversations', e);
+      }
+    })();
+
     socket.on(
       'join_conversation',
       async (
