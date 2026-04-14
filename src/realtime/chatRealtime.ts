@@ -28,3 +28,12 @@ export function broadcastMessagesRead(
 export function broadcastToConversation(conversationId: string, event: string, payload: unknown): void {
   ioRef?.to(roomForConversation(conversationId)).emit(event, payload);
 }
+
+/** Personal room: each socket joins `user:<userId>` in chatSocket for direct signaling / calls. */
+export function userRoom(userId: string): string {
+  return `user:${userId}`;
+}
+
+export function emitToUser(userId: string, event: string, payload: unknown): void {
+  ioRef?.to(userRoom(userId)).emit(event, payload);
+}

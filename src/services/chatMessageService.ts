@@ -41,6 +41,7 @@ export type SerializedChatMessage = {
   deleted?: boolean;
   /** When true, show “deleted” placeholder for this viewer */
   deletedPlaceholder?: boolean;
+  callId?: string;
 };
 
 export type CreateChatMessageOpts = {
@@ -50,6 +51,7 @@ export type CreateChatMessageOpts = {
   mimeType?: string;
   durationSec?: number;
   replyToMessageId?: string;
+  callId?: string;
 };
 
 function assertParticipant(conv: { participants: Types.ObjectId[] }, senderId: Types.ObjectId) {
@@ -134,6 +136,7 @@ export async function createChatMessage(
     fileName: opts.fileName,
     mimeType: opts.mimeType,
     durationSec: opts.durationSec,
+    callId: opts.callId,
     replyToMessageId: replyTo,
     reactions: [],
     starredBy: [],
@@ -172,10 +175,30 @@ export async function createChatMessage(
   return { message: ser };
 }
 
+/** System line when a call is placed (WebRTC orchestration). */
+export async function createCallStartedSystemMessage(
+  senderId: Types.ObjectId,
+  conversationId: string,
+  callId: string,
+  callKind: 'voice' | 'video'
+): Promise<{ message: SerializedChatMessage }> {
+  const icon = callKind === 'voice' ? '\u{1F4DE}' : '\u{1F4F9}';
+  const label = callKind === 'voice' ? 'Voice' : 'Video';
+  return createChatMessage(senderId, conversationId, `${icon} ${label} call started`, {
+    kind: 'system',
+    callId,
+  });
+}
+
 export async function createCallLogMessage(
   senderId: Types.ObjectId,
   conversationId: string,
-  payload: { callKind: 'voice' | 'video'; status: 'completed' | 'missed' | 'declined'; durationSec?: number }
+  payload: {
+    callKind: 'voice' | 'video';
+    status: 'completed' | 'missed' | 'declined';
+    durationSec?: number;
+    callId?: string;
+  }
 ): Promise<{ message: SerializedChatMessage }> {
   const conv = await Conversation.findById(conversationId);
   if (!conv) {
@@ -201,6 +224,7 @@ export async function createCallLogMessage(
     kind: 'call',
     text,
     durationSec: payload.durationSec,
+    callId: payload.callId,
     reactions: [],
     starredBy: [],
   });
@@ -504,6 +528,7 @@ async function serializeMessage(
     fileName: m.fileName,
     mimeType: m.mimeType,
     durationSec: m.durationSec,
+    callId: m.callId,
     replyToMessageId: m.replyToMessageId?.toString(),
     replyToPreview,
     reactions,

@@ -281,10 +281,11 @@ export const postCallLog = async (req: AuthRequest, res: Response): Promise<void
   try {
     const meId = (req.user as { _id: Types.ObjectId })._id;
     const { conversationId } = req.params;
-    const { callKind, status, durationSec } = req.body as {
+    const { callKind, status, durationSec, callId } = req.body as {
       callKind?: 'voice' | 'video';
       status?: 'completed' | 'missed' | 'declined';
       durationSec?: number;
+      callId?: string;
     };
     if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
       res.status(400).json({ error: 'Invalid conversationId' });
@@ -395,6 +396,49 @@ export const deleteMessageHandler = async (req: AuthRequest, res: Response): Pro
     }
     console.error('[chat] deleteMessageHandler', e);
     res.status(500).json({ error: 'Failed to delete' });
+  }
+};
+
+/** POST /api/audio-notes/upload — multipart: file, conversationId, optional caption, durationSec (audio only). */
+export const postAudioNoteUpload = async (
+  req: AuthRequest & { file?: Express.Multer.File },
+  res: Response
+): Promise<void> => {
+  try {
+    const meId = (req.user as { _id: Types.ObjectId })._id;
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'file is required' });
+      return;
+    }
+    const conversationId = String(req.body?.conversationId ?? '');
+    if (!conversationId || !Types.ObjectId.isValid(conversationId)) {
+      res.status(400).json({ error: 'conversationId required' });
+      return;
+    }
+    const caption = typeof req.body?.caption === 'string' ? req.body.caption : '';
+    const durationSec =
+      req.body?.durationSec != null && req.body.durationSec !== ''
+        ? Number(req.body.durationSec)
+        : undefined;
+    const mediaUrl = `/uploads/chat/${file.filename}`;
+    const opts: CreateChatMessageOpts = {
+      kind: 'audio',
+      mediaUrl,
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      durationSec: Number.isFinite(durationSec as number) ? durationSec : undefined,
+    };
+    const { message } = await createChatMessage(meId, conversationId, caption, opts);
+    broadcastToConversation(conversationId, 'new_message', { message });
+    res.status(201).json({ message });
+  } catch (e) {
+    if (e instanceof ChatMessageError) {
+      res.status(e.statusCode).json({ error: e.message });
+      return;
+    }
+    console.error('[chat] postAudioNoteUpload', e);
+    res.status(500).json({ error: 'Failed to upload audio note' });
   }
 };
 

@@ -11,6 +11,7 @@ import {
 } from '../services/chatMessageService';
 import { markConversationReadByUser } from '../services/conversationReadService';
 import { verifyToken } from '../utils/jwt';
+import { userRoom } from './chatRealtime';
 
 function roomForConversation(conversationId: string): string {
   return `conversation:${conversationId}`;
@@ -44,6 +45,7 @@ export function setupChatSocket(io: Server): void {
 
   io.on('connection', (socket) => {
     const userId = new Types.ObjectId((socket.data as { userId: string }).userId);
+    void socket.join(userRoom(userId.toString()));
 
     /** Join all conversation rooms immediately so clients never miss `new_message` before `join_conversation` runs. */
     void (async () => {
@@ -102,6 +104,7 @@ export function setupChatSocket(io: Server): void {
           mimeType?: string;
           durationSec?: number;
           replyToMessageId?: string;
+          callId?: string;
         },
         ack?: (result: { ok: true } | { ok: false; error: string }) => void
       ) => {
@@ -119,6 +122,7 @@ export function setupChatSocket(io: Server): void {
             mimeType: payload.mimeType,
             durationSec: payload.durationSec,
             replyToMessageId: payload.replyToMessageId,
+            callId: typeof payload.callId === 'string' ? payload.callId : undefined,
           };
           const { message } = await createChatMessage(userId, conversationId, text, opts);
           io.to(roomForConversation(conversationId)).emit('new_message', { message });

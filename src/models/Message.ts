@@ -19,6 +19,8 @@ export interface IMessage extends Document {
   mimeType?: string;
   /** Audio / video duration in seconds */
   durationSec?: number;
+  /** Links chat rows to an active or past WebRTC call session */
+  callId?: string;
   replyToMessageId?: Types.ObjectId;
   reactions: IMessageReaction[];
   /** When the peer client received the message (socket delivery ack). */
@@ -67,6 +69,7 @@ const MessageSchema = new Schema<IMessage>(
     fileName: { type: String, maxlength: 512 },
     mimeType: { type: String, maxlength: 200 },
     durationSec: { type: Number, min: 0, max: 86400 },
+    callId: { type: String, maxlength: 64, index: true },
     replyToMessageId: { type: Schema.Types.ObjectId, ref: 'Message' },
     reactions: { type: [ReactionSchema], default: [] },
     deliveredToPeerAt: { type: Date },

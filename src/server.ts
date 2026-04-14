@@ -14,6 +14,7 @@ import authRoutes from './routes/authRoutes';
 import publicRoutes from './routes/publicRoutes';
 import tripRoutes from './routes/tripRoutes';
 import vehicleRoutes from './routes/vehicleRoutes';
+import callRoutes from './routes/callRoutes';
 import chatRoutes from './routes/chatRoutes';
 import { setChatSocketServer } from './realtime/chatRealtime';
 import { setupChatSocket } from './realtime/chatSocket';
@@ -143,6 +144,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api', chatRoutes);
+app.use('/api/calls', callRoutes);
 /** Mobile / alias: same as GET /api/trips/available (requires driver JWT). */
 app.get('/api/jobs', authenticate, listAvailableTrips);
 

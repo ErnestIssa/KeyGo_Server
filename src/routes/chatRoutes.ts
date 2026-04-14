@@ -16,12 +16,14 @@ import {
   patchMessageStar,
   postCallLog,
   postConversationLockHandler,
+  postAudioNoteUpload,
   postMessage,
   postMessageUpload,
   postReportMessage,
   recentTripsForChat,
 } from '../controllers/chatController';
 import { authenticate } from '../middleware/auth';
+import { audioNoteUpload } from '../middleware/audioNoteUpload';
 import { chatMediaUpload } from '../middleware/chatUpload';
 
 const router = Router();
@@ -39,6 +41,7 @@ router.post('/conversations/:conversationId/call-log', postCallLog);
 router.patch('/conversations/:conversationId/pin', patchConversationPin);
 
 router.post('/messages/upload', chatMediaUpload.single('file'), postMessageUpload);
+router.post('/audio-notes/upload', audioNoteUpload.single('file'), postAudioNoteUpload);
 router.post('/messages', postMessage);
 router.get('/messages/:conversationId', listMessages);
 router.patch('/messages/:messageId/reaction', patchMessageReaction);
