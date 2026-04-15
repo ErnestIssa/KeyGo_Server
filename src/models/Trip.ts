@@ -2,6 +2,9 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export type TripStatus = 'pending' | 'accepted' | 'completed';
 
+/** After accept: car stays with owner until handoff; after driver starts relocation, car moves with driver. */
+export type RelocationPhase = 'awaiting_handoff' | 'in_transit';
+
 export interface IVehicleLocation {
   latitude: number;
   longitude: number;
@@ -20,6 +23,12 @@ export interface ITrip extends Document {
   dropoffLongitude?: number;
   /** Assigned driver’s last reported position for in-trip tracking. */
   vehicleLocation?: IVehicleLocation;
+  /** Owner device GPS (car location before handoff; person after). */
+  ownerLiveLocation?: IVehicleLocation;
+  /** Driver device GPS (person before handoff; car after). */
+  driverLiveLocation?: IVehicleLocation;
+  /** Set when status becomes `accepted`; driver moves to `in_transit` when relocation underway. */
+  relocationPhase?: RelocationPhase;
   carDescription: string;
   paymentAmount: number;
   status: TripStatus;
@@ -60,6 +69,12 @@ const TripSchema: Schema = new Schema(
     dropoffLatitude: { type: Number },
     dropoffLongitude: { type: Number },
     vehicleLocation: { type: VehicleLocationSchema },
+    ownerLiveLocation: { type: VehicleLocationSchema },
+    driverLiveLocation: { type: VehicleLocationSchema },
+    relocationPhase: {
+      type: String,
+      enum: ['awaiting_handoff', 'in_transit'],
+    },
     carDescription: {
       type: String,
       required: true,

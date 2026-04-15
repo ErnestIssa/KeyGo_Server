@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import User, { type IUser } from '../models/User';
+import Trip from '../models/Trip';
 import {
   DEFAULT_APP_SETTINGS,
   mergeAppSettings,
@@ -388,6 +389,23 @@ export const updateRole = async (req: AuthRequest, res: Response): Promise<void>
     if (current.role === role) {
       res.json({ user: toPublicUser(current), token: generateToken(current) });
       return;
+    }
+
+    /** Active relocation: assigned driver must stay in driver mode until the trip is completed (server-enforced). */
+    if (role === 'owner' && current.role === 'driver') {
+      const blocking = await Trip.findOne({
+        driver: current._id,
+        status: 'accepted',
+      })
+        .select('_id')
+        .lean();
+      if (blocking) {
+        res.status(409).json({
+          error:
+            'You have an active relocation as the driver. Complete the trip (owner confirms delivery) before switching to owner mode.',
+        });
+        return;
+      }
     }
 
     const updated = await User.findByIdAndUpdate(current._id, { role }, { new: true }).select('-password');

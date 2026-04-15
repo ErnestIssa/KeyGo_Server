@@ -1,6 +1,12 @@
 import { Response } from 'express';
 import Trip from '../models/Trip';
+import type { ITrip } from '../models/Trip';
 import { AuthRequest } from '../middleware/auth';
+import {
+  broadcastTripLiveToParties,
+  liveTrackingPayloadForTrip,
+  maybeBroadcastTripLive,
+} from '../services/tripLiveTrackingService';
 import { isValidLatLng, parseCoordinate } from '../utils/geo';
 
 function refId(ref: unknown): string | null {
@@ -11,24 +17,35 @@ function refId(ref: unknown): string | null {
   return String(ref);
 }
 
-type Viewer = { _id: unknown; role: string };
+type Viewer = { _id: unknown; role: string; driverApproved?: boolean };
 
 /** Server-computed UI hints — clients must not infer permissions from role + status alone. */
 function allowedActionsForTrip(
-  trip: { status: string; owner: unknown; driver?: unknown },
+  trip: { status: string; owner: unknown; driver?: unknown; relocationPhase?: string },
   viewer: Viewer
-): { accept: boolean; complete: boolean } {
+): { accept: boolean; complete: boolean; startRelocation: boolean } {
   const uid = String(viewer._id);
   const ownerId = refId(trip.owner);
+  const driverId = refId(trip.driver);
   const isOwner = ownerId != null && ownerId === uid;
 
   if (viewer.role === 'driver' && trip.status === 'pending' && ownerId != null && ownerId !== uid) {
-    return { accept: true, complete: false };
+    return { accept: true, complete: false, startRelocation: false };
   }
   if (viewer.role === 'owner' && trip.status === 'accepted' && isOwner) {
-    return { accept: false, complete: true };
+    return { accept: false, complete: true, startRelocation: false };
   }
-  return { accept: false, complete: false };
+  const phase = trip.relocationPhase ?? 'awaiting_handoff';
+  if (
+    viewer.role === 'driver' &&
+    trip.status === 'accepted' &&
+    driverId === uid &&
+    phase === 'awaiting_handoff' &&
+    viewer.driverApproved !== false
+  ) {
+    return { accept: false, complete: false, startRelocation: true };
+  }
+  return { accept: false, complete: false, startRelocation: false };
 }
 
 const tripJson = (
@@ -48,6 +65,19 @@ const tripJson = (
       heading?: number;
       recordedAt: Date;
     };
+    ownerLiveLocation?: {
+      latitude: number;
+      longitude: number;
+      heading?: number;
+      recordedAt: Date;
+    };
+    driverLiveLocation?: {
+      latitude: number;
+      longitude: number;
+      heading?: number;
+      recordedAt: Date;
+    };
+    relocationPhase?: string;
     carDescription: string;
     paymentAmount: number;
     status: string;
@@ -58,6 +88,7 @@ const tripJson = (
   const o = trip.owner as { _id?: unknown; name?: string; email?: string } | null;
   const d = trip.driver as { _id?: unknown; name?: string; email?: string } | null;
   const vl = trip.vehicleLocation;
+  const liveTracking = liveTrackingPayloadForTrip(trip as unknown as ITrip);
   return {
     id: String(trip._id),
     pickupLocation: trip.pickupLocation,
@@ -88,7 +119,10 @@ const tripJson = (
     driver: d
       ? { id: String(d._id), name: d.name, email: d.email }
       : undefined,
-    allowedActions: viewer ? allowedActionsForTrip(trip, viewer) : { accept: false, complete: false },
+    allowedActions: viewer
+      ? allowedActionsForTrip(trip, viewer)
+      : { accept: false, complete: false, startRelocation: false },
+    ...(liveTracking ? { liveTracking } : {}),
   };
 };
 
@@ -262,19 +296,156 @@ export const updateTripVehicleLocation = async (req: AuthRequest, res: Response)
       return;
     }
 
-    trip.vehicleLocation = {
+    const loc = {
       latitude: lat,
       longitude: lng,
       recordedAt: new Date(),
       ...(heading != null ? { heading } : {}),
     };
+    trip.driverLiveLocation = loc;
+    if (trip.relocationPhase === 'in_transit') {
+      trip.vehicleLocation = loc;
+    }
     await trip.save();
     await trip.populate('owner', 'name email');
     await trip.populate('driver', 'name email');
 
+    maybeBroadcastTripLive(trip as unknown as ITrip, String(user._id));
+
     res.json({ trip: tripJson(trip, user) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update vehicle location' });
+  }
+};
+
+/** Owner or driver posts device GPS; server stores, throttled socket broadcast to the other party. */
+export const postTripLiveLocation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const { id } = req.params;
+    const { latitude: rawLat, longitude: rawLng, heading: rawHeading } = req.body as {
+      latitude?: unknown;
+      longitude?: unknown;
+      heading?: unknown;
+    };
+
+    const lat = parseCoordinate(rawLat);
+    const lng = parseCoordinate(rawLng);
+    if (lat == null || lng == null || !isValidLatLng(lat, lng)) {
+      res.status(400).json({ error: 'Valid latitude and longitude are required' });
+      return;
+    }
+
+    let heading: number | undefined;
+    if (rawHeading !== undefined && rawHeading !== null && rawHeading !== '') {
+      const h = parseCoordinate(rawHeading);
+      if (h == null || h < 0 || h > 360) {
+        res.status(400).json({ error: 'heading must be a number from 0 to 360' });
+        return;
+      }
+      heading = h;
+    }
+
+    const trip = await Trip.findById(id);
+    if (!trip) {
+      res.status(404).json({ error: 'Trip not found' });
+      return;
+    }
+
+    const uid = String(user._id);
+    const isOwner = refId(trip.owner) === uid;
+    const isDriver = refId(trip.driver) === uid;
+
+    const loc = {
+      latitude: lat,
+      longitude: lng,
+      recordedAt: new Date(),
+      ...(heading != null ? { heading } : {}),
+    };
+
+    if (trip.status === 'pending') {
+      if (!isOwner) {
+        res.status(403).json({ error: 'Only the trip owner can share location before a driver accepts' });
+        return;
+      }
+      trip.ownerLiveLocation = loc;
+    } else if (trip.status === 'accepted') {
+      if (!isOwner && !isDriver) {
+        res.status(403).json({ error: 'You are not a party on this trip' });
+        return;
+      }
+      if (isOwner) {
+        trip.ownerLiveLocation = loc;
+      }
+      if (isDriver) {
+        trip.driverLiveLocation = loc;
+        if (trip.relocationPhase === 'in_transit') {
+          trip.vehicleLocation = loc;
+        }
+      }
+    } else {
+      res.status(400).json({ error: 'Live tracking is only available for open or active relocations' });
+      return;
+    }
+
+    await trip.save();
+    await trip.populate('owner', 'name email');
+    await trip.populate('driver', 'name email');
+
+    maybeBroadcastTripLive(trip as unknown as ITrip, uid);
+
+    res.json({ trip: tripJson(trip, user) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update live location' });
+  }
+};
+
+/** Driver marks relocation underway (car handed off); icon semantics flip server-side. */
+export const startTripRelocation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user || user.role !== 'driver') {
+      res.status(403).json({ error: 'Only the assigned driver can start relocation' });
+      return;
+    }
+
+    if (user.driverApproved === false) {
+      res.status(403).json({ error: 'Driver account is not approved' });
+      return;
+    }
+
+    const { id } = req.params;
+    const trip = await Trip.findById(id);
+    if (!trip) {
+      res.status(404).json({ error: 'Trip not found' });
+      return;
+    }
+
+    if (String(trip.driver) !== String(user._id)) {
+      res.status(403).json({ error: 'Only the assigned driver can start this relocation' });
+      return;
+    }
+
+    if (trip.status !== 'accepted') {
+      res.status(400).json({ error: 'Trip must be accepted first' });
+      return;
+    }
+
+    trip.relocationPhase = 'in_transit';
+    await trip.save();
+    await trip.populate('owner', 'name email');
+    await trip.populate('driver', 'name email');
+
+    broadcastTripLiveToParties(trip as unknown as ITrip, String(user._id));
+
+    res.json({ trip: tripJson(trip, user) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to start relocation' });
   }
 };
 
@@ -357,9 +528,12 @@ export const acceptTrip = async (req: AuthRequest, res: Response): Promise<void>
 
     trip.driver = user._id;
     trip.status = 'accepted';
+    trip.relocationPhase = 'awaiting_handoff';
     await trip.save();
     await trip.populate('owner', 'name email');
     await trip.populate('driver', 'name email');
+
+    broadcastTripLiveToParties(trip as unknown as ITrip, String(user._id));
 
     res.json({ trip: tripJson(trip, user) });
   } catch (error) {
@@ -394,6 +568,10 @@ export const completeTrip = async (req: AuthRequest, res: Response): Promise<voi
     }
 
     trip.status = 'completed';
+    trip.relocationPhase = undefined;
+    trip.ownerLiveLocation = undefined;
+    trip.driverLiveLocation = undefined;
+    trip.vehicleLocation = undefined;
     await trip.save();
     await trip.populate('owner', 'name email');
     await trip.populate('driver', 'name email');
